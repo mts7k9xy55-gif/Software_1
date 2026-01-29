@@ -1,5 +1,5 @@
-import POSSystemSimple from '@/components/POSSystemSimple'
+import POSSystem from '@/components/POSSystem'
 
 export default function Home() {
-  return <POSSystemSimple />
+  return <POSSystem />
 }
