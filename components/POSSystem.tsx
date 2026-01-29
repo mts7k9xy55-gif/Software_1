@@ -35,7 +35,9 @@ export default function POSSystem() {
   // 商品登録用
   const [newName, setNewName] = useState('')
   const [newPrice, setNewPrice] = useState('')
-  const [newImageUrl, setNewImageUrl] = useState('')
+  const [newImageFile, setNewImageFile] = useState<File | null>(null)
+  const [imagePreview, setImagePreview] = useState<string | null>(null)
+  const [isUploading, setIsUploading] = useState(false)
 
   // データ取得
   useEffect(() => {
@@ -103,10 +105,58 @@ export default function POSSystem() {
     }
   }
 
+  // 画像ファイル選択時の処理
+  const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (file) {
+      setNewImageFile(file)
+      // プレビュー表示用
+      const reader = new FileReader()
+      reader.onloadend = () => {
+        setImagePreview(reader.result as string)
+      }
+      reader.readAsDataURL(file)
+    }
+  }
+
+  // 画像をSupabase Storageにアップロード
+  const uploadImage = async (file: File): Promise<string | null> => {
+    const fileExt = file.name.split('.').pop()
+    const fileName = `${shopId}/${Date.now()}.${fileExt}`
+    
+    const { error } = await supabase.storage
+      .from('product-images')
+      .upload(fileName, file)
+    
+    if (error) {
+      console.error('Upload error:', error)
+      return null
+    }
+    
+    const { data: { publicUrl } } = supabase.storage
+      .from('product-images')
+      .getPublicUrl(fileName)
+    
+    return publicUrl
+  }
+
   // 商品登録
   const handleProductSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!newName || !newPrice || !shopId) return
+
+    setIsUploading(true)
+    let imageUrl: string | null = null
+
+    // 画像がある場合はアップロード
+    if (newImageFile) {
+      imageUrl = await uploadImage(newImageFile)
+      if (!imageUrl) {
+        alert('画像のアップロードに失敗しました')
+        setIsUploading(false)
+        return
+      }
+    }
 
     const { error } = await supabase.from('menu_items').insert({
       shop_id: shopId,
@@ -114,15 +164,18 @@ export default function POSSystem() {
       price: parseInt(newPrice),
       tax_rate: 10,
       category: 'その他',
-      image_url: newImageUrl || null
+      image_url: imageUrl
     })
+
+    setIsUploading(false)
 
     if (error) {
       alert('登録エラー: ' + error.message)
     } else {
       setNewName('')
       setNewPrice('')
-      setNewImageUrl('')
+      setNewImageFile(null)
+      setImagePreview(null)
       fetchMenuItems()
     }
   }
@@ -412,19 +465,30 @@ export default function POSSystem() {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-bold mb-1">商品画像URL（任意）</label>
+                  <label className="block text-sm font-bold mb-1">商品画像（任意）</label>
                   <input
-                    value={newImageUrl}
-                    onChange={(e) => setNewImageUrl(e.target.value)}
-                    className="w-full p-2 border rounded"
-                    placeholder="https://example.com/image.jpg"
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    onChange={handleImageChange}
+                    className="w-full p-2 border rounded bg-white"
                   />
+                  {imagePreview && (
+                    <div className="mt-2">
+                      <img 
+                        src={imagePreview} 
+                        alt="プレビュー" 
+                        className="w-24 h-24 object-cover rounded border"
+                      />
+                    </div>
+                  )}
                 </div>
                 <button
                   type="submit"
-                  className="w-full py-3 bg-blue-600 text-white font-bold rounded"
+                  disabled={isUploading}
+                  className={`w-full py-3 text-white font-bold rounded ${isUploading ? 'bg-gray-400' : 'bg-blue-600 hover:bg-blue-700'}`}
                 >
-                  商品を登録
+                  {isUploading ? '📤 アップロード中...' : '商品を登録'}
                 </button>
               </form>
               <p className="text-sm text-gray-500 mt-4 bg-gray-50 p-3 rounded">
