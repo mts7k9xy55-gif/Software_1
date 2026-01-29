@@ -2,12 +2,8 @@
 
 import { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+
+// 必要なアイコンだけインポート（lucide-reactは入っているはず）
 import { ShoppingCart, Settings, Plus, Minus, Trash2, Upload, Loader2 } from 'lucide-react'
 
 // 型定義
@@ -24,159 +20,14 @@ interface OrderItem extends MenuItem {
   quantity: number
 }
 
-// レジモードコンポーネント
-function RegisterMode({ 
-  menuItems, 
-  orderItems, 
-  onAddItem, 
-  onUpdateQuantity, 
-  onRemoveItem, 
-  onCheckout,
-  isProcessing 
-}: {
-  menuItems: MenuItem[]
-  orderItems: OrderItem[]
-  onAddItem: (item: MenuItem) => void
-  onUpdateQuantity: (id: number, delta: number) => void
-  onRemoveItem: (id: number) => void
-  onCheckout: () => void
-  isProcessing: boolean
-}) {
-  const totalAmount = orderItems.reduce(
-    (sum, item) => sum + item.price * item.quantity,
-    0
-  )
+export default function POSSystem() {
+  const [mode, setMode] = useState<'register' | 'admin'>('register')
+  const [menuItems, setMenuItems] = useState<MenuItem[]>([])
+  const [orderItems, setOrderItems] = useState<OrderItem[]>([])
+  const [isLoading, setIsLoading] = useState(true)
+  const [isProcessing, setIsProcessing] = useState(false)
 
-  const totalTax = orderItems.reduce(
-    (sum, item) => sum + item.price * item.quantity * (item.tax_rate / 100),
-    0
-  )
-
-  return (
-    <div className="flex gap-6 h-full">
-      {/* 左側: 商品グリッド */}
-      <div className="flex-1">
-        <h2 className="text-xl font-bold mb-4">商品一覧</h2>
-        <div className="grid grid-cols-3 gap-4">
-          {menuItems.map((item) => (
-            <Card
-              key={item.id}
-              className="cursor-pointer hover:shadow-lg transition-shadow"
-              onClick={() => onAddItem(item)}
-            >
-              <CardContent className="p-4">
-                {item.image_url && (
-                  <img
-                    src={item.image_url}
-                    alt={item.name}
-                    className="w-full h-32 object-cover rounded-md mb-2"
-                  />
-                )}
-                <h3 className="font-semibold text-lg">{item.name}</h3>
-                <div className="flex justify-between items-center mt-2">
-                  <p className="text-xl font-bold text-green-600">
-                    ¥{item.price.toLocaleString()}
-                  </p>
-                  <span className="text-xs bg-gray-100 px-2 py-1 rounded">
-                    {item.tax_rate}%
-                  </span>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-      </div>
-
-      {/* 右側: 注文リスト */}
-      <div className="w-96">
-        <Card className="h-full flex flex-col">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <ShoppingCart className="w-5 h-5" />
-              現在の注文
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="flex-1 flex flex-col">
-            <div className="flex-1 overflow-auto space-y-3">
-              {orderItems.length === 0 ? (
-                <p className="text-gray-500 text-center py-8">
-                  商品をクリックして追加
-                </p>
-              ) : (
-                orderItems.map((item) => (
-                  <div
-                    key={item.id}
-                    className="flex items-center justify-between p-3 bg-gray-50 rounded-lg"
-                  >
-                    <div className="flex-1">
-                      <p className="font-medium">{item.name}</p>
-                      <p className="text-sm text-gray-600">
-                        ¥{item.price.toLocaleString()} × {item.quantity}
-                      </p>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <Button
-                        size="icon"
-                        variant="outline"
-                        onClick={() => onUpdateQuantity(item.id, -1)}
-                      >
-                        <Minus className="w-4 h-4" />
-                      </Button>
-                      <span className="w-8 text-center">{item.quantity}</span>
-                      <Button
-                        size="icon"
-                        variant="outline"
-                        onClick={() => onUpdateQuantity(item.id, 1)}
-                      >
-                        <Plus className="w-4 h-4" />
-                      </Button>
-                      <Button
-                        size="icon"
-                        variant="destructive"
-                        onClick={() => onRemoveItem(item.id)}
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </Button>
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-
-            {/* 合計・決済 */}
-            <div className="border-t pt-4 mt-4 space-y-3">
-              <div className="flex justify-between text-sm text-gray-600">
-                <span>小計</span>
-                <span>¥{(totalAmount).toLocaleString()}</span>
-              </div>
-              <div className="flex justify-between text-sm text-gray-600">
-                <span>消費税</span>
-                <span>¥{Math.floor(totalTax).toLocaleString()}</span>
-              </div>
-              <div className="flex justify-between text-xl font-bold">
-                <span>合計（税込）</span>
-                <span>¥{Math.floor(totalAmount + totalTax).toLocaleString()}</span>
-              </div>
-              <Button
-                className="w-full h-14 text-lg"
-                disabled={orderItems.length === 0 || isProcessing}
-                onClick={onCheckout}
-              >
-                {isProcessing ? (
-                  <Loader2 className="w-5 h-5 animate-spin mr-2" />
-                ) : null}
-                決済する
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-    </div>
-  )
-}
-
-// 管理モードコンポーネント
-function AdminMode({ onItemAdded }: { onItemAdded: () => void }) {
+  // 管理画面用のステート
   const [name, setName] = useState('')
   const [price, setPrice] = useState('')
   const [taxRate, setTaxRate] = useState('10')
@@ -186,18 +37,37 @@ function AdminMode({ onItemAdded }: { onItemAdded: () => void }) {
   const [isUploading, setIsUploading] = useState(false)
   const [message, setMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null)
 
+  // 商品データを取得
+  const fetchMenuItems = async () => {
+    const { data, error } = await supabase
+      .from('menu_items')
+      .select('*')
+      .order('id', { ascending: true })
+
+    if (error) {
+      console.error('商品取得エラー:', error)
+    } else {
+      setMenuItems(data || [])
+    }
+    setIsLoading(false)
+  }
+
+  useEffect(() => {
+    fetchMenuItems()
+  }, [])
+
+  // 画像選択処理
   const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (file) {
       setImageFile(file)
       const reader = new FileReader()
-      reader.onloadend = () => {
-        setImagePreview(reader.result as string)
-      }
+      reader.onloadend = () => setImagePreview(reader.result as string)
       reader.readAsDataURL(file)
     }
   }
 
+  // 商品登録処理
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setIsUploading(true)
@@ -206,23 +76,17 @@ function AdminMode({ onItemAdded }: { onItemAdded: () => void }) {
     try {
       let imageUrl = null
 
-      // 画像をSupabase Storageにアップロード
+      // 画像アップロード
       if (imageFile) {
         const fileExt = imageFile.name.split('.').pop()
         const fileName = `${Date.now()}-${Math.random().toString(36).substring(7)}.${fileExt}`
         
-        const { data: uploadData, error: uploadError } = await supabase.storage
-          .from('menu-images')
-          .upload(fileName, imageFile, {
-            cacheControl: '3600',
-            upsert: false
-          })
+        const { error: uploadError } = await supabase.storage
+          .from('menu-images') // バケット名はここ！
+          .upload(fileName, imageFile, { cacheControl: '3600', upsert: false })
 
-        if (uploadError) {
-          throw new Error(`画像アップロードエラー: ${uploadError.message}`)
-        }
+        if (uploadError) throw new Error(`画像アップロードエラー: ${uploadError.message}`)
 
-        // 公開URLを取得
         const { data: urlData } = supabase.storage
           .from('menu-images')
           .getPublicUrl(fileName)
@@ -230,7 +94,7 @@ function AdminMode({ onItemAdded }: { onItemAdded: () => void }) {
         imageUrl = urlData.publicUrl
       }
 
-      // menu_itemsテーブルに保存
+      // DB保存
       const { error: insertError } = await supabase
         .from('menu_items')
         .insert({
@@ -241,21 +105,15 @@ function AdminMode({ onItemAdded }: { onItemAdded: () => void }) {
           image_url: imageUrl
         })
 
-      if (insertError) {
-        throw new Error(`商品登録エラー: ${insertError.message}`)
-      }
+      if (insertError) throw new Error(`商品登録エラー: ${insertError.message}`)
 
-      // フォームをリセット
+      // リセット
       setName('')
       setPrice('')
-      setTaxRate('10')
-      setCategory('')
       setImageFile(null)
       setImagePreview(null)
       setMessage({ type: 'success', text: '商品を登録しました！' })
-      
-      // 親コンポーネントに通知
-      onItemAdded()
+      fetchMenuItems() // リスト更新
 
     } catch (error) {
       setMessage({ 
@@ -267,288 +125,192 @@ function AdminMode({ onItemAdded }: { onItemAdded: () => void }) {
     }
   }
 
-  return (
-    <div className="max-w-2xl mx-auto">
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Settings className="w-5 h-5" />
-            商品登録
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={handleSubmit} className="space-y-6">
-            {/* 商品名 */}
-            <div className="space-y-2">
-              <Label htmlFor="name">商品名 *</Label>
-              <Input
-                id="name"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="例: カフェラテ"
-                required
-              />
-            </div>
-
-            {/* 価格 */}
-            <div className="space-y-2">
-              <Label htmlFor="price">価格（税抜） *</Label>
-              <Input
-                id="price"
-                type="number"
-                value={price}
-                onChange={(e) => setPrice(e.target.value)}
-                placeholder="例: 500"
-                min="0"
-                required
-              />
-            </div>
-
-            {/* 税率 */}
-            <div className="space-y-2">
-              <Label htmlFor="taxRate">税率 *</Label>
-              <Select value={taxRate} onValueChange={setTaxRate}>
-                <SelectTrigger>
-                  <SelectValue placeholder="税率を選択" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="8">8%（軽減税率）</SelectItem>
-                  <SelectItem value="10">10%（標準税率）</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-
-            {/* カテゴリ */}
-            <div className="space-y-2">
-              <Label htmlFor="category">カテゴリ</Label>
-              <Input
-                id="category"
-                value={category}
-                onChange={(e) => setCategory(e.target.value)}
-                placeholder="例: ドリンク"
-              />
-            </div>
-
-            {/* 画像アップロード */}
-            <div className="space-y-2">
-              <Label htmlFor="image">商品画像</Label>
-              <div className="border-2 border-dashed rounded-lg p-6 text-center">
-                {imagePreview ? (
-                  <div className="space-y-4">
-                    <img
-                      src={imagePreview}
-                      alt="プレビュー"
-                      className="max-h-48 mx-auto rounded-lg"
-                    />
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={() => {
-                        setImageFile(null)
-                        setImagePreview(null)
-                      }}
-                    >
-                      画像を削除
-                    </Button>
-                  </div>
-                ) : (
-                  <label className="cursor-pointer block">
-                    <Upload className="w-10 h-10 mx-auto text-gray-400 mb-2" />
-                    <p className="text-gray-600">クリックして画像を選択</p>
-                    <p className="text-sm text-gray-400">PNG, JPG, GIF対応</p>
-                    <input
-                      type="file"
-                      accept="image/*"
-                      onChange={handleImageChange}
-                      className="hidden"
-                    />
-                  </label>
-                )}
-              </div>
-            </div>
-
-            {/* メッセージ */}
-            {message && (
-              <div
-                className={`p-4 rounded-lg ${
-                  message.type === 'success'
-                    ? 'bg-green-50 text-green-700 border border-green-200'
-                    : 'bg-red-50 text-red-700 border border-red-200'
-                }`}
-              >
-                {message.text}
-              </div>
-            )}
-
-            {/* 登録ボタン */}
-            <Button
-              type="submit"
-              className="w-full h-12 text-lg"
-              disabled={isUploading || !name || !price}
-            >
-              {isUploading ? (
-                <>
-                  <Loader2 className="w-5 h-5 animate-spin mr-2" />
-                  登録中...
-                </>
-              ) : (
-                '商品を登録'
-              )}
-            </Button>
-          </form>
-        </CardContent>
-      </Card>
-    </div>
-  )
-}
-
-// メインコンポーネント
-export default function POSSystem() {
-  const [mode, setMode] = useState<'register' | 'admin'>('register')
-  const [menuItems, setMenuItems] = useState<MenuItem[]>([])
-  const [orderItems, setOrderItems] = useState<OrderItem[]>([])
-  const [isLoading, setIsLoading] = useState(true)
-  const [isProcessing, setIsProcessing] = useState(false)
-
-  // 商品データを取得
-  const fetchMenuItems = async () => {
-    const { data, error } = await supabase
-      .from('menu_items')
-      .select('*')
-      .order('id', { ascending: true })
-
-    if (error) {
-      console.error('商品取得エラー:', error)
-      return
-    }
-
-    setMenuItems(data || [])
-    setIsLoading(false)
-  }
-
-  useEffect(() => {
-    fetchMenuItems()
-  }, [])
-
-  // 商品を注文に追加
+  // レジ機能: 追加
   const addToOrder = (item: MenuItem) => {
     setOrderItems((prev) => {
       const existing = prev.find((o) => o.id === item.id)
-      if (existing) {
-        return prev.map((o) =>
-          o.id === item.id ? { ...o, quantity: o.quantity + 1 } : o
-        )
-      }
-      return [...prev, { ...item, quantity: 1 }]
+      return existing
+        ? prev.map((o) => o.id === item.id ? { ...o, quantity: o.quantity + 1 } : o)
+        : [...prev, { ...item, quantity: 1 }]
     })
   }
 
-  // 数量を更新
+  // レジ機能: 数量変更
   const updateQuantity = (id: number, delta: number) => {
     setOrderItems((prev) =>
-      prev
-        .map((item) =>
-          item.id === id
-            ? { ...item, quantity: Math.max(0, item.quantity + delta) }
-            : item
-        )
-        .filter((item) => item.quantity > 0)
+      prev.map((item) => item.id === id ? { ...item, quantity: Math.max(0, item.quantity + delta) } : item)
+          .filter((item) => item.quantity > 0)
     )
   }
 
-  // 商品を削除
-  const removeItem = (id: number) => {
-    setOrderItems((prev) => prev.filter((item) => item.id !== id))
-  }
-
-  // 決済処理
+  // レジ機能: 決済
   const checkout = async () => {
     if (orderItems.length === 0) return
-
     setIsProcessing(true)
 
     const taxDetails = orderItems.reduce((acc, item) => {
       const rate = item.tax_rate
       const amount = item.price * item.quantity
-      const tax = amount * (rate / 100)
-      
-      if (!acc[rate]) {
-        acc[rate] = { subtotal: 0, tax: 0 }
-      }
+      if (!acc[rate]) acc[rate] = { subtotal: 0, tax: 0 }
       acc[rate].subtotal += amount
-      acc[rate].tax += tax
-      
+      acc[rate].tax += amount * (rate / 100)
       return acc
     }, {} as Record<number, { subtotal: number; tax: number }>)
 
-    const totalAmount = orderItems.reduce(
-      (sum, item) => sum + item.price * item.quantity * (1 + item.tax_rate / 100),
-      0
-    )
+    const totalAmount = orderItems.reduce((sum, item) => sum + item.price * item.quantity * (1 + item.tax_rate / 100), 0)
 
     const { error } = await supabase.from('sales').insert({
-      items: orderItems.map((item) => ({
-        id: item.id,
-        name: item.name,
-        price: item.price,
-        quantity: item.quantity,
-        tax_rate: item.tax_rate
-      })),
+      items: orderItems,
       total_amount: Math.floor(totalAmount),
       tax_details: taxDetails
     })
 
     setIsProcessing(false)
-
     if (error) {
-      console.error('決済エラー:', error)
-      alert('決済に失敗しました')
-      return
+      alert('決済エラー')
+    } else {
+      alert('決済完了！')
+      setOrderItems([])
     }
-
-    alert('決済が完了しました！')
-    setOrderItems([])
   }
 
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center h-screen">
-        <Loader2 className="w-8 h-8 animate-spin" />
-      </div>
-    )
-  }
+  // 合計計算
+  const totalAmount = orderItems.reduce((sum, item) => sum + item.price * item.quantity, 0)
+  const totalTax = orderItems.reduce((sum, item) => sum + item.price * item.quantity * (item.tax_rate / 100), 0)
+
+  if (isLoading) return <div className="p-10 text-center">読み込み中...</div>
 
   return (
-    <div className="min-h-screen bg-gray-100 p-6">
-      {/* ヘッダー: モード切り替え */}
-      <div className="mb-6">
-        <Tabs value={mode} onValueChange={(v) => setMode(v as 'register' | 'admin')}>
-          <TabsList className="grid w-64 grid-cols-2">
-            <TabsTrigger value="register" className="flex items-center gap-2">
-              <ShoppingCart className="w-4 h-4" />
-              レジ
-            </TabsTrigger>
-            <TabsTrigger value="admin" className="flex items-center gap-2">
-              <Settings className="w-4 h-4" />
-              管理
-            </TabsTrigger>
-          </TabsList>
-        </Tabs>
+    <div className="min-h-screen bg-gray-100 p-4 max-w-4xl mx-auto">
+      {/* タブ切り替え */}
+      <div className="bg-white p-2 rounded-lg shadow mb-6 flex gap-2">
+        <button 
+          onClick={() => setMode('register')}
+          className={`flex-1 py-3 px-4 rounded-md font-bold transition-colors ${mode === 'register' ? 'bg-blue-600 text-white' : 'hover:bg-gray-100 text-gray-600'}`}
+        >
+          <div className="flex items-center justify-center gap-2">
+            <ShoppingCart size={20} /> レジモード
+          </div>
+        </button>
+        <button 
+          onClick={() => setMode('admin')}
+          className={`flex-1 py-3 px-4 rounded-md font-bold transition-colors ${mode === 'admin' ? 'bg-blue-600 text-white' : 'hover:bg-gray-100 text-gray-600'}`}
+        >
+          <div className="flex items-center justify-center gap-2">
+            <Settings size={20} /> 管理モード
+          </div>
+        </button>
       </div>
 
-      {/* コンテンツ */}
       {mode === 'register' ? (
-        <RegisterMode
-          menuItems={menuItems}
-          orderItems={orderItems}
-          onAddItem={addToOrder}
-          onUpdateQuantity={updateQuantity}
-          onRemoveItem={removeItem}
-          onCheckout={checkout}
-          isProcessing={isProcessing}
-        />
+        <div className="flex flex-col md:flex-row gap-4 h-[80vh]">
+          {/* 商品一覧 */}
+          <div className="flex-1 overflow-y-auto bg-white p-4 rounded-lg shadow">
+            <h2 className="font-bold text-lg mb-4">メニュー一覧</h2>
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+              {menuItems.map((item) => (
+                <div key={item.id} onClick={() => addToOrder(item)} className="cursor-pointer border rounded-lg overflow-hidden hover:shadow-md transition-shadow">
+                  {item.image_url ? (
+                    <img src={item.image_url} alt={item.name} className="w-full h-32 object-cover" />
+                  ) : (
+                    <div className="w-full h-32 bg-gray-200 flex items-center justify-center text-gray-400">No Image</div>
+                  )}
+                  <div className="p-3">
+                    <h3 className="font-bold">{item.name}</h3>
+                    <div className="flex justify-between items-center mt-1">
+                      <span className="text-green-600 font-bold">¥{item.price}</span>
+                      <span className="text-xs bg-gray-100 px-1 rounded">{item.tax_rate}%</span>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+            {menuItems.length === 0 && <p className="text-gray-500 text-center mt-10">商品がありません。「管理モード」から登録してください。</p>}
+          </div>
+
+          {/* 注文リスト */}
+          <div className="w-full md:w-80 bg-white p-4 rounded-lg shadow flex flex-col">
+            <h2 className="font-bold text-lg mb-4 flex items-center gap-2"><ShoppingCart /> 現在の注文</h2>
+            <div className="flex-1 overflow-y-auto space-y-2 mb-4">
+              {orderItems.map((item) => (
+                <div key={item.id} className="flex justify-between items-center p-2 bg-gray-50 rounded">
+                  <div>
+                    <div className="font-bold">{item.name}</div>
+                    <div className="text-sm text-gray-500">¥{item.price} x {item.quantity}</div>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <button onClick={() => updateQuantity(item.id, -1)} className="p-1 bg-white border rounded"><Minus size={14}/></button>
+                    <span className="w-6 text-center text-sm">{item.quantity}</span>
+                    <button onClick={() => updateQuantity(item.id, 1)} className="p-1 bg-white border rounded"><Plus size={14}/></button>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="border-t pt-4 space-y-2">
+              <div className="flex justify-between"><span>小計</span><span>¥{totalAmount.toLocaleString()}</span></div>
+              <div className="flex justify-between"><span>消費税</span><span>¥{Math.floor(totalTax).toLocaleString()}</span></div>
+              <div className="flex justify-between text-xl font-bold"><span>合計</span><span>¥{Math.floor(totalAmount + totalTax).toLocaleString()}</span></div>
+              <button 
+                onClick={checkout}
+                disabled={orderItems.length === 0 || isProcessing}
+                className="w-full bg-blue-600 text-white py-4 rounded-lg font-bold text-lg disabled:bg-gray-300 mt-2"
+              >
+                {isProcessing ? '処理中...' : '会計する'}
+              </button>
+            </div>
+          </div>
+        </div>
       ) : (
-        <AdminMode onItemAdded={fetchMenuItems} />
+        /* 管理モード */
+        <div className="bg-white p-6 rounded-lg shadow max-w-lg mx-auto">
+          <h2 className="font-bold text-xl mb-6 flex items-center gap-2"><Settings /> 商品登録</h2>
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div>
+              <label className="block text-sm font-bold mb-1">商品名</label>
+              <input value={name} onChange={e => setName(e.target.value)} className="w-full p-2 border rounded" required placeholder="例: オムライス" />
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-bold mb-1">価格（税抜）</label>
+                <input type="number" value={price} onChange={e => setPrice(e.target.value)} className="w-full p-2 border rounded" required placeholder="1000" />
+              </div>
+              <div>
+                <label className="block text-sm font-bold mb-1">税率</label>
+                <select value={taxRate} onChange={e => setTaxRate(e.target.value)} className="w-full p-2 border rounded">
+                  <option value="8">8% (軽減)</option>
+                  <option value="10">10% (標準)</option>
+                </select>
+              </div>
+            </div>
+            <div>
+              <label className="block text-sm font-bold mb-1">カテゴリ</label>
+              <input value={category} onChange={e => setCategory(e.target.value)} className="w-full p-2 border rounded" placeholder="例: 食事" />
+            </div>
+            <div>
+              <label className="block text-sm font-bold mb-1">商品画像</label>
+              <div className="border-2 border-dashed rounded-lg p-4 text-center">
+                {imagePreview ? (
+                  <div className="space-y-2">
+                    <img src={imagePreview} className="h-32 mx-auto object-contain" />
+                    <button type="button" onClick={() => {setImageFile(null); setImagePreview(null)}} className="text-red-500 text-sm underline">画像を削除</button>
+                  </div>
+                ) : (
+                  <label className="cursor-pointer block p-4">
+                    <Upload className="mx-auto text-gray-400 mb-2" />
+                    <span className="text-blue-600">画像をアップロード</span>
+                    <input type="file" accept="image/*" onChange={handleImageChange} className="hidden" />
+                  </label>
+                )}
+              </div>
+            </div>
+            
+            {message && <div className={`p-3 rounded ${message.type === 'success' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>{message.text}</div>}
+            
+            <button type="submit" disabled={isUploading} className="w-full bg-blue-600 text-white py-3 rounded-lg font-bold disabled:bg-gray-400">
+              {isUploading ? <span className="flex items-center justify-center gap-2"><Loader2 className="animate-spin"/> アップロード中...</span> : '登録する'}
+            </button>
+          </form>
+        </div>
       )}
     </div>
   )
