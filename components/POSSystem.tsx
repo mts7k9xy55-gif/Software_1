@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
+import { useAuth } from '@/lib/auth'
 
 // 型定義
 interface MenuItem {
@@ -9,6 +10,8 @@ interface MenuItem {
   name: string
   price: number
   tax_rate: number
+  image_url?: string
+  shop_id: string
 }
 
 interface SaleRecord {
@@ -16,61 +19,78 @@ interface SaleRecord {
   items: { id: number; name: string; price: number; quantity: number; tax_rate: number }[]
   total_amount: number
   created_at: string
+  shop_id: string
 }
 
 export default function POSSystem() {
+  const { user, shopId, signOut } = useAuth()
   const [mode, setMode] = useState<'register' | 'admin'>('register')
   const [menuItems, setMenuItems] = useState<MenuItem[]>([])
   const [salesData, setSalesData] = useState<SaleRecord[]>([])
   const [isLoading, setIsLoading] = useState(true)
 
+  // 税率タブ: テイクアウト(8%) or 店内飲食(10%)
+  const [taxMode, setTaxMode] = useState<'takeout' | 'dine-in'>('dine-in')
+
   // 商品登録用
   const [newName, setNewName] = useState('')
   const [newPrice, setNewPrice] = useState('')
-  const [newTaxRate, setNewTaxRate] = useState('10')
+  const [newImageUrl, setNewImageUrl] = useState('')
 
   // データ取得
   useEffect(() => {
-    fetchMenuItems()
-    fetchTodaySales()
-  }, [])
+    if (shopId) {
+      fetchMenuItems()
+      fetchTodaySales()
+    }
+  }, [shopId])
 
   const fetchMenuItems = async () => {
+    if (!shopId) return
     const { data } = await supabase
       .from('menu_items')
-      .select('id, name, price, tax_rate')
+      .select('id, name, price, tax_rate, image_url, shop_id')
+      .eq('shop_id', shopId)
       .order('name')
     setMenuItems(data || [])
     setIsLoading(false)
   }
 
   const fetchTodaySales = async () => {
+    if (!shopId) return
     const today = new Date().toISOString().split('T')[0]
     const { data } = await supabase
       .from('sales')
       .select('*')
+      .eq('shop_id', shopId)
       .gte('created_at', today)
       .order('created_at', { ascending: false })
     setSalesData(data || [])
   }
 
-  // 商品クリックで即座に売上記録
-  const recordSale = async (item: MenuItem, qty: number = 1) => {
-    const subtotal = item.price * qty
-    const tax = subtotal * (item.tax_rate / 100)
+  // 商品クリックで即座に売上記録（税率はタブで自動決定）
+  const recordSale = async (item: MenuItem) => {
+    if (!shopId) return
+    
+    // タブに応じて税率を自動適用
+    const appliedTaxRate = taxMode === 'takeout' ? 8 : 10
+    
+    const subtotal = item.price
+    const tax = subtotal * (appliedTaxRate / 100)
     const total = subtotal + tax
 
     const saleData = {
+      shop_id: shopId,
       items: [{
         id: item.id,
         name: item.name,
         price: item.price,
-        quantity: qty,
-        tax_rate: item.tax_rate
+        quantity: 1,
+        tax_rate: appliedTaxRate
       }],
       total_amount: Math.floor(total),
       tax_details: {
-        [item.tax_rate]: { subtotal, tax }
+        [appliedTaxRate]: { subtotal, tax }
       }
     }
 
@@ -79,7 +99,6 @@ export default function POSSystem() {
     if (error) {
       alert('記録エラー: ' + error.message)
     } else {
-      // 即座に履歴を更新
       fetchTodaySales()
     }
   }
@@ -87,13 +106,15 @@ export default function POSSystem() {
   // 商品登録
   const handleProductSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!newName || !newPrice) return
+    if (!newName || !newPrice || !shopId) return
 
     const { error } = await supabase.from('menu_items').insert({
+      shop_id: shopId,
       name: newName,
       price: parseInt(newPrice),
-      tax_rate: parseInt(newTaxRate),
-      category: 'その他'
+      tax_rate: 10,
+      category: 'その他',
+      image_url: newImageUrl || null
     })
 
     if (error) {
@@ -101,6 +122,7 @@ export default function POSSystem() {
     } else {
       setNewName('')
       setNewPrice('')
+      setNewImageUrl('')
       fetchMenuItems()
     }
   }
@@ -140,16 +162,50 @@ export default function POSSystem() {
     return new Date(dateStr).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })
   }
 
+  // 現在の税率
+  const currentTaxRate = taxMode === 'takeout' ? 8 : 10
+
   if (isLoading) {
     return <div className="p-10 text-center">読み込み中...</div>
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 p-4">
-      <div className="max-w-6xl mx-auto">
+    <div className="min-h-screen bg-gray-50">
+      {/* 最上部：税率タブ（大きく目立つ） */}
+      <div className="sticky top-0 z-10 bg-white shadow-md">
+        <div className="max-w-6xl mx-auto">
+          <div className="flex">
+            <button
+              onClick={() => setTaxMode('takeout')}
+              className={`flex-1 py-5 text-xl font-bold transition-colors ${
+                taxMode === 'takeout' 
+                  ? 'bg-orange-500 text-white' 
+                  : 'bg-gray-100 text-gray-600 hover:bg-orange-100'
+              }`}
+            >
+              🥡 テイクアウト (8%)
+            </button>
+            <button
+              onClick={() => setTaxMode('dine-in')}
+              className={`flex-1 py-5 text-xl font-bold transition-colors ${
+                taxMode === 'dine-in' 
+                  ? 'bg-green-600 text-white' 
+                  : 'bg-gray-100 text-gray-600 hover:bg-green-100'
+              }`}
+            >
+              🍽️ 店内飲食 (10%)
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="max-w-6xl mx-auto p-4">
         {/* ヘッダー */}
         <div className="flex justify-between items-center mb-4">
-          <h1 className="text-xl font-bold">売上記録システム</h1>
+          <div>
+            <h1 className="text-xl font-bold">売上記録システム</h1>
+            <p className="text-sm text-gray-500">{user?.email}</p>
+          </div>
           <div className="flex gap-2">
             <button
               onClick={() => setMode('register')}
@@ -163,15 +219,27 @@ export default function POSSystem() {
             >
               商品管理
             </button>
+            <button
+              onClick={signOut}
+              className="px-4 py-2 text-gray-600 border rounded hover:bg-gray-100"
+            >
+              ログアウト
+            </button>
           </div>
         </div>
 
         {mode === 'register' ? (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            {/* 左: 商品ボタン（クリックで即記録） */}
+            {/* 左: 商品ボタンGrid（写真付き） */}
             <div className="bg-white p-4 rounded shadow">
-              <h2 className="font-bold text-lg mb-4 border-b pb-2">
-                商品をタップして売上を記録
+              {/* 現在の税率表示 */}
+              <div className={`text-center py-2 mb-4 rounded ${taxMode === 'takeout' ? 'bg-orange-100 text-orange-700' : 'bg-green-100 text-green-700'}`}>
+                現在: <span className="font-bold text-lg">{taxMode === 'takeout' ? '🥡 テイクアウト' : '🍽️ 店内飲食'}</span>
+                （税率 {currentTaxRate}%）
+              </div>
+
+              <h2 className="font-bold text-lg mb-3 border-b pb-2">
+                商品をタップして記録
               </h2>
               
               {menuItems.length === 0 ? (
@@ -179,24 +247,40 @@ export default function POSSystem() {
                   商品がありません。「商品管理」から登録してください。
                 </p>
               ) : (
-                <div className="grid grid-cols-2 gap-3">
-                  {menuItems.map(item => (
-                    <button
-                      key={item.id}
-                      onClick={() => recordSale(item, 1)}
-                      className="p-4 border-2 rounded-lg hover:bg-blue-50 hover:border-blue-400 transition-colors text-left"
-                    >
-                      <div className="font-bold text-lg">{item.name}</div>
-                      <div className="flex justify-between items-center mt-1">
-                        <span className="text-green-600 font-bold">
-                          ¥{Math.floor(item.price * (1 + item.tax_rate / 100)).toLocaleString()}
-                        </span>
-                        <span className="text-xs bg-gray-100 px-2 py-1 rounded">
-                          {item.tax_rate}%
-                        </span>
-                      </div>
-                    </button>
-                  ))}
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 max-h-[60vh] overflow-y-auto">
+                  {menuItems.map(item => {
+                    const taxIncludedPrice = Math.floor(item.price * (1 + currentTaxRate / 100))
+                    return (
+                      <button
+                        key={item.id}
+                        onClick={() => recordSale(item)}
+                        className="border-2 rounded-lg overflow-hidden hover:shadow-lg hover:border-blue-400 transition-all bg-white active:scale-95"
+                      >
+                        {/* 商品画像 */}
+                        {item.image_url ? (
+                          <img
+                            src={item.image_url}
+                            alt={item.name}
+                            className="w-full h-28 object-cover"
+                          />
+                        ) : (
+                          <div className="w-full h-28 bg-gradient-to-br from-gray-200 to-gray-300 flex items-center justify-center text-4xl">
+                            🍽️
+                          </div>
+                        )}
+                        {/* 商品情報 */}
+                        <div className="p-2">
+                          <div className="font-bold text-sm truncate">{item.name}</div>
+                          <div className="text-green-600 font-bold text-lg">
+                            ¥{taxIncludedPrice.toLocaleString()}
+                          </div>
+                          <div className="text-xs text-gray-500">
+                            (税抜 ¥{item.price.toLocaleString()})
+                          </div>
+                        </div>
+                      </button>
+                    )
+                  })}
                 </div>
               )}
             </div>
@@ -216,26 +300,30 @@ export default function POSSystem() {
                 <table className="w-full text-sm">
                   <thead className="bg-gray-50">
                     <tr>
-                      <th className="text-left p-2">税率</th>
+                      <th className="text-left p-2">区分</th>
                       <th className="text-right p-2">税抜</th>
                       <th className="text-right p-2">消費税</th>
+                      <th className="text-right p-2">税込</th>
                     </tr>
                   </thead>
                   <tbody>
                     <tr className="border-b">
-                      <td className="p-2">8%（軽減）</td>
+                      <td className="p-2">🥡 テイクアウト(8%)</td>
                       <td className="p-2 text-right">¥{Math.floor(stats.tax8Total).toLocaleString()}</td>
                       <td className="p-2 text-right">¥{Math.floor(stats.tax8Amount).toLocaleString()}</td>
+                      <td className="p-2 text-right font-bold">¥{Math.floor(stats.tax8Total + stats.tax8Amount).toLocaleString()}</td>
                     </tr>
                     <tr className="border-b">
-                      <td className="p-2">10%（標準）</td>
+                      <td className="p-2">🍽️ 店内飲食(10%)</td>
                       <td className="p-2 text-right">¥{Math.floor(stats.tax10Total).toLocaleString()}</td>
                       <td className="p-2 text-right">¥{Math.floor(stats.tax10Amount).toLocaleString()}</td>
+                      <td className="p-2 text-right font-bold">¥{Math.floor(stats.tax10Total + stats.tax10Amount).toLocaleString()}</td>
                     </tr>
                     <tr className="bg-gray-50 font-bold">
                       <td className="p-2">合計</td>
                       <td className="p-2 text-right">¥{Math.floor(stats.tax8Total + stats.tax10Total).toLocaleString()}</td>
                       <td className="p-2 text-right">¥{Math.floor(stats.tax8Amount + stats.tax10Amount).toLocaleString()}</td>
+                      <td className="p-2 text-right">¥{stats.totalSales.toLocaleString()}</td>
                     </tr>
                   </tbody>
                 </table>
@@ -250,11 +338,12 @@ export default function POSSystem() {
                   </button>
                 </div>
                 
-                <div className="overflow-y-auto max-h-64">
+                <div className="overflow-y-auto max-h-48">
                   <table className="w-full text-sm">
                     <thead className="bg-gray-50 sticky top-0">
                       <tr>
                         <th className="text-left p-2">時刻</th>
+                        <th className="text-center p-2">区分</th>
                         <th className="text-left p-2">商品</th>
                         <th className="text-right p-2">金額</th>
                       </tr>
@@ -262,28 +351,31 @@ export default function POSSystem() {
                     <tbody>
                       {salesData.length === 0 ? (
                         <tr>
-                          <td colSpan={3} className="p-4 text-center text-gray-400">
+                          <td colSpan={4} className="p-4 text-center text-gray-400">
                             まだ記録がありません
                           </td>
                         </tr>
                       ) : (
-                        salesData.map(sale => (
-                          <tr key={sale.id} className="border-b hover:bg-gray-50">
-                            <td className="p-2 text-gray-600">{formatTime(sale.created_at)}</td>
-                            <td className="p-2">
-                              {sale.items?.map((item, i) => (
-                                <span key={i}>
-                                  {item.name}
-                                  {item.quantity > 1 && `×${item.quantity}`}
-                                  {i < sale.items.length - 1 ? ', ' : ''}
-                                </span>
-                              ))}
-                            </td>
-                            <td className="p-2 text-right font-bold">
-                              ¥{sale.total_amount.toLocaleString()}
-                            </td>
-                          </tr>
-                        ))
+                        salesData.map(sale => {
+                          const taxRate = sale.items?.[0]?.tax_rate
+                          const isTakeout = taxRate === 8
+                          return (
+                            <tr key={sale.id} className="border-b hover:bg-gray-50">
+                              <td className="p-2 text-gray-600">{formatTime(sale.created_at)}</td>
+                              <td className="p-2 text-center text-lg">
+                                {isTakeout ? '🥡' : '🍽️'}
+                              </td>
+                              <td className="p-2">
+                                {sale.items?.map((item, i) => (
+                                  <span key={i}>{item.name}</span>
+                                ))}
+                              </td>
+                              <td className="p-2 text-right font-bold">
+                                ¥{sale.total_amount.toLocaleString()}
+                              </td>
+                            </tr>
+                          )
+                        })
                       )}
                     </tbody>
                   </table>
@@ -308,29 +400,25 @@ export default function POSSystem() {
                     required
                   />
                 </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-bold mb-1">価格（税抜）</label>
-                    <input
-                      type="number"
-                      value={newPrice}
-                      onChange={(e) => setNewPrice(e.target.value)}
-                      className="w-full p-2 border rounded"
-                      placeholder="500"
-                      required
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-bold mb-1">税率</label>
-                    <select
-                      value={newTaxRate}
-                      onChange={(e) => setNewTaxRate(e.target.value)}
-                      className="w-full p-2 border rounded"
-                    >
-                      <option value="8">8%（軽減税率）</option>
-                      <option value="10">10%（標準税率）</option>
-                    </select>
-                  </div>
+                <div>
+                  <label className="block text-sm font-bold mb-1">価格（税抜）</label>
+                  <input
+                    type="number"
+                    value={newPrice}
+                    onChange={(e) => setNewPrice(e.target.value)}
+                    className="w-full p-2 border rounded"
+                    placeholder="500"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-bold mb-1">商品画像URL（任意）</label>
+                  <input
+                    value={newImageUrl}
+                    onChange={(e) => setNewImageUrl(e.target.value)}
+                    className="w-full p-2 border rounded"
+                    placeholder="https://example.com/image.jpg"
+                  />
                 </div>
                 <button
                   type="submit"
@@ -339,33 +427,29 @@ export default function POSSystem() {
                   商品を登録
                 </button>
               </form>
+              <p className="text-sm text-gray-500 mt-4 bg-gray-50 p-3 rounded">
+                💡 税率は画面上部の「テイクアウト/店内飲食」タブで自動適用されます
+              </p>
             </div>
 
             {/* 登録済み商品一覧 */}
             <div className="bg-white p-4 rounded shadow">
               <h2 className="font-bold text-lg mb-4 border-b pb-2">登録済み商品</h2>
-              <table className="w-full text-sm">
-                <thead className="bg-gray-100">
-                  <tr>
-                    <th className="text-left p-2">商品名</th>
-                    <th className="text-right p-2">税抜価格</th>
-                    <th className="text-right p-2">税込価格</th>
-                    <th className="text-right p-2">税率</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {menuItems.map(item => (
-                    <tr key={item.id} className="border-b">
-                      <td className="p-2">{item.name}</td>
-                      <td className="p-2 text-right">¥{item.price.toLocaleString()}</td>
-                      <td className="p-2 text-right font-bold">
-                        ¥{Math.floor(item.price * (1 + item.tax_rate / 100)).toLocaleString()}
-                      </td>
-                      <td className="p-2 text-right">{item.tax_rate}%</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <div className="space-y-2 max-h-96 overflow-y-auto">
+                {menuItems.map(item => (
+                  <div key={item.id} className="flex items-center gap-3 p-2 border rounded">
+                    {item.image_url ? (
+                      <img src={item.image_url} alt={item.name} className="w-12 h-12 object-cover rounded" />
+                    ) : (
+                      <div className="w-12 h-12 bg-gray-200 rounded flex items-center justify-center text-xl">🍽️</div>
+                    )}
+                    <div className="flex-1">
+                      <div className="font-bold">{item.name}</div>
+                      <div className="text-sm text-gray-600">税抜 ¥{item.price.toLocaleString()}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         )}
