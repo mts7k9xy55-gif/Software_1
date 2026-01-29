@@ -1,0 +1,13 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "/^source ~/\\.zshrc && cd /Users/yutoinoue/Desktop/Software_1 && npm run dev$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/opt/homebrew/bin/npm": true,
+        "/^which node && node -v && which npm && npm -v$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
+    }
+}
