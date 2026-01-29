@@ -12,6 +12,8 @@ interface MenuItem {
   tax_rate: number
   image_url?: string
   shop_id: string
+  only_takeout?: boolean
+  only_eat_in?: boolean
 }
 
 interface SaleRecord {
@@ -23,7 +25,7 @@ interface SaleRecord {
 }
 
 export default function POSSystem() {
-  const { user, shopId, signOut } = useAuth()
+  const { user, shopId, shopName, signOut, updateShopName } = useAuth()
   const [mode, setMode] = useState<'register' | 'admin'>('register')
   const [menuItems, setMenuItems] = useState<MenuItem[]>([])
   const [salesData, setSalesData] = useState<SaleRecord[]>([])
@@ -38,6 +40,19 @@ export default function POSSystem() {
   const [newImageFile, setNewImageFile] = useState<File | null>(null)
   const [imagePreview, setImagePreview] = useState<string | null>(null)
   const [isUploading, setIsUploading] = useState(false)
+  const [newOnlyTakeout, setNewOnlyTakeout] = useState(false)
+  const [newOnlyEatIn, setNewOnlyEatIn] = useState(false)
+
+  // 店舗名入力モーダル
+  const [showShopNameModal, setShowShopNameModal] = useState(false)
+  const [shopNameInput, setShopNameInput] = useState('')
+
+  // 店舗名未設定時にモーダル表示
+  useEffect(() => {
+    if (shopId && !isLoading && shopName === null) {
+      setShowShopNameModal(true)
+    }
+  }, [shopId, isLoading, shopName])
 
   // データ取得
   useEffect(() => {
@@ -51,12 +66,65 @@ export default function POSSystem() {
     if (!shopId) return
     const { data } = await supabase
       .from('menu_items')
-      .select('id, name, price, tax_rate, image_url, shop_id')
+      .select('id, name, price, tax_rate, image_url, shop_id, only_takeout, only_eat_in')
       .eq('shop_id', shopId)
       .order('name')
     setMenuItems(data || [])
     setIsLoading(false)
   }
+
+  // 商品削除
+  const deleteMenuItem = async (id: number) => {
+    if (!confirm('この商品を削除しますか？')) return
+    
+    const { error } = await supabase
+      .from('menu_items')
+      .delete()
+      .eq('id', id)
+    
+    if (error) {
+      alert('削除エラー: ' + error.message)
+    } else {
+      fetchMenuItems()
+    }
+  }
+
+  // 商品の非表示フラグを更新
+  const updateItemVisibility = async (id: number, field: 'only_takeout' | 'only_eat_in', value: boolean) => {
+    const { error } = await supabase
+      .from('menu_items')
+      .update({ [field]: value })
+      .eq('id', id)
+    
+    if (error) {
+      alert('更新エラー: ' + error.message)
+    } else {
+      fetchMenuItems()
+    }
+  }
+
+  // 店舗名を保存
+  const handleShopNameSubmit = async () => {
+    if (!shopNameInput.trim()) return
+    const { error } = await updateShopName(shopNameInput.trim())
+    if (error) {
+      alert('保存エラー: ' + error.message)
+    } else {
+      setShowShopNameModal(false)
+      setShopNameInput('')
+    }
+  }
+
+  // 税率タブに応じてフィルタリングされた商品リスト
+  const filteredMenuItems = menuItems.filter(item => {
+    if (taxMode === 'takeout') {
+      // テイクアウト時: only_eat_in が true の商品を除外
+      return !item.only_eat_in
+    } else {
+      // 店内飲食時: only_takeout が true の商品を除外
+      return !item.only_takeout
+    }
+  })
 
   const fetchTodaySales = async () => {
     if (!shopId) return
@@ -164,7 +232,9 @@ export default function POSSystem() {
       price: parseInt(newPrice),
       tax_rate: 10,
       category: 'その他',
-      image_url: imageUrl
+      image_url: imageUrl,
+      only_takeout: newOnlyTakeout,
+      only_eat_in: newOnlyEatIn
     })
 
     setIsUploading(false)
@@ -176,6 +246,8 @@ export default function POSSystem() {
       setNewPrice('')
       setNewImageFile(null)
       setImagePreview(null)
+      setNewOnlyTakeout(false)
+      setNewOnlyEatIn(false)
       fetchMenuItems()
     }
   }
@@ -224,6 +296,31 @@ export default function POSSystem() {
 
   return (
     <div className="min-h-screen bg-gray-50">
+      {/* 店舗名入力モーダル */}
+      {showShopNameModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white p-6 rounded-lg shadow-xl max-w-md w-full mx-4">
+            <h2 className="text-xl font-bold mb-4">🏠 店舗名を設定してください</h2>
+            <p className="text-gray-600 mb-4">ヘッダーに「○○ 専用POS」と表示されます。</p>
+            <input
+              type="text"
+              value={shopNameInput}
+              onChange={(e) => setShopNameInput(e.target.value)}
+              placeholder="例: カフェABC"
+              className="w-full p-3 border rounded mb-4 text-lg"
+              autoFocus
+            />
+            <button
+              onClick={handleShopNameSubmit}
+              disabled={!shopNameInput.trim()}
+              className="w-full py-3 bg-blue-600 text-white font-bold rounded disabled:bg-gray-300"
+            >
+              保存する
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* 最上部：税率タブ（大きく目立つ） */}
       <div className="sticky top-0 z-10 bg-white shadow-md">
         <div className="max-w-6xl mx-auto">
@@ -256,10 +353,20 @@ export default function POSSystem() {
         {/* ヘッダー */}
         <div className="flex justify-between items-center mb-4">
           <div>
-            <h1 className="text-xl font-bold">売上記録システム</h1>
+            <h1 className="text-xl font-bold">
+              {shopName ? `${shopName} 専用POS` : '売上記録システム'}
+            </h1>
             <p className="text-sm text-gray-500">{user?.email}</p>
           </div>
           <div className="flex gap-2">
+            {!shopName && (
+              <button
+                onClick={() => setShowShopNameModal(true)}
+                className="px-4 py-2 text-orange-600 border border-orange-300 rounded hover:bg-orange-50"
+              >
+                🏠 店舗名設定
+              </button>
+            )}
             <button
               onClick={() => setMode('register')}
               className={`px-4 py-2 font-bold rounded ${mode === 'register' ? 'bg-blue-600 text-white' : 'bg-white border'}`}
@@ -295,13 +402,13 @@ export default function POSSystem() {
                 商品をタップして記録
               </h2>
               
-              {menuItems.length === 0 ? (
+              {filteredMenuItems.length === 0 ? (
                 <p className="text-gray-500 text-center py-8">
-                  商品がありません。「商品管理」から登録してください。
+                  {menuItems.length === 0 ? '商品がありません。「商品管理」から登録してください。' : 'このタブで表示可能な商品がありません。'}
                 </p>
               ) : (
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 max-h-[60vh] overflow-y-auto">
-                  {menuItems.map(item => {
+                  {filteredMenuItems.map(item => {
                     const taxIncludedPrice = Math.floor(item.price * (1 + currentTaxRate / 100))
                     return (
                       <button
@@ -483,6 +590,35 @@ export default function POSSystem() {
                     </div>
                   )}
                 </div>
+                <div className="border rounded p-3 bg-gray-50">
+                  <label className="block text-sm font-bold mb-2">表示制限（任意）</label>
+                  <div className="flex gap-4">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={newOnlyTakeout}
+                        onChange={(e) => {
+                          setNewOnlyTakeout(e.target.checked)
+                          if (e.target.checked) setNewOnlyEatIn(false)
+                        }}
+                        className="w-5 h-5"
+                      />
+                      <span>🥡 テイクアウトのみ</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={newOnlyEatIn}
+                        onChange={(e) => {
+                          setNewOnlyEatIn(e.target.checked)
+                          if (e.target.checked) setNewOnlyTakeout(false)
+                        }}
+                        className="w-5 h-5"
+                      />
+                      <span>🍽️ 店内飲食のみ</span>
+                    </label>
+                  </div>
+                </div>
                 <button
                   type="submit"
                   disabled={isUploading}
@@ -499,17 +635,43 @@ export default function POSSystem() {
             {/* 登録済み商品一覧 */}
             <div className="bg-white p-4 rounded shadow">
               <h2 className="font-bold text-lg mb-4 border-b pb-2">登録済み商品</h2>
-              <div className="space-y-2 max-h-96 overflow-y-auto">
+              <div className="space-y-3 max-h-96 overflow-y-auto">
                 {menuItems.map(item => (
-                  <div key={item.id} className="flex items-center gap-3 p-2 border rounded">
-                    {item.image_url ? (
-                      <img src={item.image_url} alt={item.name} className="w-12 h-12 object-cover rounded" />
-                    ) : (
-                      <div className="w-12 h-12 bg-gray-200 rounded flex items-center justify-center text-xl">🍽️</div>
-                    )}
-                    <div className="flex-1">
-                      <div className="font-bold">{item.name}</div>
-                      <div className="text-sm text-gray-600">税抜 ¥{item.price.toLocaleString()}</div>
+                  <div key={item.id} className="p-3 border rounded">
+                    <div className="flex items-center gap-3">
+                      {item.image_url ? (
+                        <img src={item.image_url} alt={item.name} className="w-12 h-12 object-cover rounded" />
+                      ) : (
+                        <div className="w-12 h-12 bg-gray-200 rounded flex items-center justify-center text-xl">🍽️</div>
+                      )}
+                      <div className="flex-1">
+                        <div className="font-bold">{item.name}</div>
+                        <div className="text-sm text-gray-600">税抜 ¥{item.price.toLocaleString()}</div>
+                      </div>
+                      <button
+                        onClick={() => deleteMenuItem(item.id)}
+                        className="px-3 py-1 text-red-600 hover:bg-red-50 rounded border border-red-200"
+                      >
+                        🗑️ 削除
+                      </button>
+                    </div>
+                    {/* 表示制限トグル */}
+                    <div className="mt-2 pt-2 border-t flex gap-2">
+                      <button
+                        onClick={() => updateItemVisibility(item.id, 'only_takeout', !item.only_takeout)}
+                        className={`px-3 py-1 text-sm rounded border ${item.only_takeout ? 'bg-orange-500 text-white border-orange-500' : 'bg-white text-gray-600 border-gray-300 hover:border-orange-400'}`}
+                      >
+                        🥡 テイクアウトのみ
+                      </button>
+                      <button
+                        onClick={() => updateItemVisibility(item.id, 'only_eat_in', !item.only_eat_in)}
+                        className={`px-3 py-1 text-sm rounded border ${item.only_eat_in ? 'bg-green-600 text-white border-green-600' : 'bg-white text-gray-600 border-gray-300 hover:border-green-400'}`}
+                      >
+                        🍽️ 店内飲食のみ
+                      </button>
+                      {!item.only_takeout && !item.only_eat_in && (
+                        <span className="text-xs text-gray-400 self-center">← 両方に表示</span>
+                      )}
                     </div>
                   </div>
                 ))}
