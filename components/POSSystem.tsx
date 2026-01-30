@@ -26,10 +26,15 @@ interface SaleRecord {
 
 export default function POSSystem() {
   const { user, shopId, shopName, signOut, updateShopName } = useAuth()
-  const [mode, setMode] = useState<'register' | 'admin'>('register')
+  const [mode, setMode] = useState<'register' | 'admin' | 'tax'>('register')
   const [menuItems, setMenuItems] = useState<MenuItem[]>([])
   const [salesData, setSalesData] = useState<SaleRecord[]>([])
   const [isLoading, setIsLoading] = useState(true)
+
+  // 税務申告用
+  const [startDate, setStartDate] = useState('')
+  const [endDate, setEndDate] = useState('')
+  const [periodSales, setPeriodSales] = useState<SaleRecord[]>([])
 
   // 税率タブ: テイクアウト(8%) or 店内飲食(10%)
   const [taxMode, setTaxMode] = useState<'takeout' | 'dine-in'>('dine-in')
@@ -136,6 +141,90 @@ export default function POSSystem() {
       .gte('created_at', today)
       .order('created_at', { ascending: false })
     setSalesData(data || [])
+  }
+
+  // 期間指定で売上取得
+  const fetchPeriodSales = async () => {
+    if (!shopId || !startDate || !endDate) return
+    const { data } = await supabase
+      .from('sales')
+      .select('*')
+      .eq('shop_id', shopId)
+      .gte('created_at', startDate)
+      .lte('created_at', endDate + 'T23:59:59')
+      .order('created_at', { ascending: false })
+    setPeriodSales(data || [])
+  }
+
+  // 期間集計計算
+  const getPeriodStats = () => {
+    let totalSales = 0
+    let tax8Total = 0
+    let tax10Total = 0
+    let tax8Amount = 0
+    let tax10Amount = 0
+
+    periodSales.forEach(sale => {
+      totalSales += sale.total_amount
+      if (sale.items) {
+        sale.items.forEach(item => {
+          const subtotal = item.price * item.quantity
+          const tax = subtotal * (item.tax_rate / 100)
+          if (item.tax_rate === 8) {
+            tax8Total += subtotal
+            tax8Amount += tax
+          } else {
+            tax10Total += subtotal
+            tax10Amount += tax
+          }
+        })
+      }
+    })
+
+    return { totalSales, tax8Total, tax10Total, tax8Amount, tax10Amount }
+  }
+
+  // PDF出力
+  const exportPDF = async () => {
+    const { jsPDF } = await import('jspdf')
+    const autoTable = (await import('jspdf-autotable')).default
+    const doc = new jsPDF()
+    const stats = getPeriodStats()
+
+    // 日本語フォント対応のため、デフォルトフォントを使用
+    doc.setFont('helvetica')
+    doc.setFontSize(16)
+    doc.text(shopName || 'POS System', 14, 20)
+    doc.setFontSize(12)
+    doc.text(`Tax Report: ${startDate} - ${endDate}`, 14, 30)
+
+    // 税率別集計テーブル
+    autoTable(doc, {
+      startY: 40,
+      head: [['Tax Rate', 'Subtotal (excl. tax)', 'Tax Amount', 'Total (incl. tax)']],
+      body: [
+        [
+          '8% (Takeout)',
+          `¥${Math.floor(stats.tax8Total).toLocaleString()}`,
+          `¥${Math.floor(stats.tax8Amount).toLocaleString()}`,
+          `¥${Math.floor(stats.tax8Total + stats.tax8Amount).toLocaleString()}`
+        ],
+        [
+          '10% (Dine-in)',
+          `¥${Math.floor(stats.tax10Total).toLocaleString()}`,
+          `¥${Math.floor(stats.tax10Amount).toLocaleString()}`,
+          `¥${Math.floor(stats.tax10Total + stats.tax10Amount).toLocaleString()}`
+        ],
+        [
+          'Total',
+          `¥${Math.floor(stats.tax8Total + stats.tax10Total).toLocaleString()}`,
+          `¥${Math.floor(stats.tax8Amount + stats.tax10Amount).toLocaleString()}`,
+          `¥${stats.totalSales.toLocaleString()}`
+        ]
+      ]
+    })
+
+    doc.save(`tax-report-${startDate}-${endDate}.pdf`)
   }
 
   // 商品クリックで即座に売上記録（税率はタブで自動決定）
@@ -380,6 +469,12 @@ export default function POSSystem() {
               商品管理
             </button>
             <button
+              onClick={() => setMode('tax')}
+              className={`px-4 py-2 font-bold rounded ${mode === 'tax' ? 'bg-blue-600 text-white' : 'bg-white border'}`}
+            >
+              📊 税務申告
+            </button>
+            <button
               onClick={signOut}
               className="px-4 py-2 text-gray-600 border rounded hover:bg-gray-100"
             >
@@ -543,7 +638,7 @@ export default function POSSystem() {
               </div>
             </div>
           </div>
-        ) : (
+        ) : mode === 'admin' ? (
           /* 商品管理モード */
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             {/* 商品登録 */}
@@ -677,6 +772,133 @@ export default function POSSystem() {
                 ))}
               </div>
             </div>
+          </div>
+        ) : (
+          /* 税務申告モード */
+          <div className="bg-white p-6 rounded shadow max-w-4xl mx-auto">
+            <h2 className="font-bold text-2xl mb-6 border-b pb-3">📊 税務申告レポート</h2>
+            
+            {/* 期間選択 */}
+            <div className="mb-6 p-4 bg-gray-50 rounded">
+              <h3 className="font-bold mb-3">期間を選択</h3>
+              <div className="flex gap-4 items-end">
+                <div>
+                  <label className="block text-sm mb-1">開始日</label>
+                  <input
+                    type="date"
+                    value={startDate}
+                    onChange={(e) => setStartDate(e.target.value)}
+                    className="p-2 border rounded"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm mb-1">終了日</label>
+                  <input
+                    type="date"
+                    value={endDate}
+                    onChange={(e) => setEndDate(e.target.value)}
+                    className="p-2 border rounded"
+                  />
+                </div>
+                <button
+                  onClick={fetchPeriodSales}
+                  className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+                >
+                  集計
+                </button>
+              </div>
+            </div>
+
+            {/* 集計結果 */}
+            {periodSales.length > 0 && (
+              <div className="space-y-4">
+                <div className="p-4 bg-green-50 rounded border border-green-200">
+                  <h3 className="font-bold text-lg mb-3">税率別集計</h3>
+                  <div className="space-y-2">
+                    {(() => {
+                      const stats = getPeriodStats()
+                      return (
+                        <>
+                          <div className="grid grid-cols-4 gap-2 font-bold border-b pb-2">
+                            <div>区分</div>
+                            <div className="text-right">税抜売上</div>
+                            <div className="text-right">消費税額</div>
+                            <div className="text-right">税込合計</div>
+                          </div>
+                          <div className="grid grid-cols-4 gap-2 py-2">
+                            <div>🥡 8% (テイクアウト)</div>
+                            <div className="text-right">¥{Math.floor(stats.tax8Total).toLocaleString()}</div>
+                            <div className="text-right">¥{Math.floor(stats.tax8Amount).toLocaleString()}</div>
+                            <div className="text-right font-bold">¥{Math.floor(stats.tax8Total + stats.tax8Amount).toLocaleString()}</div>
+                          </div>
+                          <div className="grid grid-cols-4 gap-2 py-2">
+                            <div>🍽️ 10% (店内飲食)</div>
+                            <div className="text-right">¥{Math.floor(stats.tax10Total).toLocaleString()}</div>
+                            <div className="text-right">¥{Math.floor(stats.tax10Amount).toLocaleString()}</div>
+                            <div className="text-right font-bold">¥{Math.floor(stats.tax10Total + stats.tax10Amount).toLocaleString()}</div>
+                          </div>
+                          <div className="grid grid-cols-4 gap-2 py-2 border-t font-bold text-lg">
+                            <div>合計</div>
+                            <div className="text-right">¥{Math.floor(stats.tax8Total + stats.tax10Total).toLocaleString()}</div>
+                            <div className="text-right">¥{Math.floor(stats.tax8Amount + stats.tax10Amount).toLocaleString()}</div>
+                            <div className="text-right">¥{stats.totalSales.toLocaleString()}</div>
+                          </div>
+                        </>
+                      )
+                    })()}
+                  </div>
+                </div>
+
+                {/* PDF出力ボタン */}
+                <button
+                  onClick={exportPDF}
+                  className="w-full py-3 bg-red-600 text-white rounded font-bold hover:bg-red-700 flex items-center justify-center gap-2"
+                >
+                  📄 PDF出力（税務申告用）
+                </button>
+
+                {/* 売上明細 */}
+                <div className="border rounded">
+                  <div className="p-3 bg-gray-100 border-b font-bold">
+                    売上明細（{periodSales.length}件）
+                  </div>
+                  <div className="max-h-96 overflow-y-auto">
+                    <table className="w-full text-sm">
+                      <thead className="bg-gray-50 sticky top-0">
+                        <tr className="border-b">
+                          <th className="text-left p-2">日時</th>
+                          <th className="text-center p-2">区分</th>
+                          <th className="text-left p-2">商品</th>
+                          <th className="text-right p-2">金額</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {periodSales.map(sale => {
+                          const taxRate = sale.items?.[0]?.tax_rate
+                          const isTakeout = taxRate === 8
+                          return (
+                            <tr key={sale.id} className="border-b hover:bg-gray-50">
+                              <td className="p-2 text-gray-600">{new Date(sale.created_at).toLocaleString('ja-JP')}</td>
+                              <td className="p-2 text-center text-lg">
+                                {isTakeout ? '🥡' : '🍽️'}
+                              </td>
+                              <td className="p-2">
+                                {sale.items?.map((item, i) => (
+                                  <span key={i}>{item.name} ×{item.quantity}</span>
+                                )).reduce((prev, curr) => [prev, ', ', curr] as any)}
+                              </td>
+                              <td className="p-2 text-right font-bold">
+                                ¥{sale.total_amount.toLocaleString()}
+                              </td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>
