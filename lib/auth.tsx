@@ -48,11 +48,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // 店舗名を取得
   const fetchShopName = async (userId: string) => {
     const { data } = await supabase
-      .from('shops')
-      .select('name')
+      .from('profiles')
+      .select('shop_name')
       .eq('id', userId)
       .single()
-    setShopName(data?.name ?? null)
+    setShopName(data?.shop_name ?? null)
   }
 
   // 店舗名を更新
@@ -60,8 +60,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!user) return { error: new Error('Not authenticated') }
     
     const { error } = await supabase
-      .from('shops')
-      .upsert({ id: user.id, name }, { onConflict: 'id' })
+      .from('profiles')
+      .upsert({ id: user.id, shop_name: name }, { onConflict: 'id' })
     
     if (!error) {
       setShopName(name)
