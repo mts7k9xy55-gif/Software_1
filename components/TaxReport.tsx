@@ -153,7 +153,7 @@ export default function TaxReport() {
     pdf.setFillColor(220, 220, 220)
     pdf.rect(col1, yPosition - 2, 180, 6, 'F')
     pdf.setFontSize(10)
-    pdf.setFont(undefined, 'bold')
+    pdf.setFont('helvetica', 'bold')
     pdf.text('合計', col1 + 2, yPosition + 2)
     pdf.text(`¥${stats.totalSubtotal.toLocaleString()}`, col2 + 2, yPosition + 2)
     pdf.text(`¥${stats.totalTax.toLocaleString()}`, col3 + 2, yPosition + 2)
