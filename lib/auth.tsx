@@ -23,17 +23,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    // 現在のセッションを取得
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setUser(session?.user ?? null)
-      if (session?.user) {
+    const persistSession = (session: any) => {
+      if (typeof window === 'undefined') return
+      if (session) {
+        window.localStorage.setItem('pos-auth-token', JSON.stringify(session))
+      }
+    }
+
+    const init = async () => {
+      const { data: { session } } = await supabase.auth.getSession()
+      if (session && session.expires_at && session.expires_at * 1000 > Date.now()) {
+        setUser(session.user)
         fetchShopName(session.user.id)
+        persistSession(session)
+      } else {
+        setUser(null)
+        setShopName(null)
       }
       setLoading(false)
-    })
+    }
+
+    init()
 
     // 認証状態の変化を監視
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
+        persistSession(session)
+      }
       setUser(session?.user ?? null)
       if (session?.user) {
         fetchShopName(session.user.id)
