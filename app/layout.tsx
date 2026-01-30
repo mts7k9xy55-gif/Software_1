@@ -6,8 +6,14 @@ import { AuthProvider } from '@/lib/auth'
 const inter = Inter({ subsets: ['latin'] })
 
 export const metadata: Metadata = {
-  title: 'POS System',
-  description: 'Point of Sale System with Supabase',
+  title: 'ALLGOAI POS',
+  description: 'Software eating the local',
+  manifest: '/manifest.json', // PWA設定をここに追加
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: 'black-translucent',
+    title: 'ALLGOAI',
+  },
 }
 
 export default function RootLayout({
@@ -17,6 +23,10 @@ export default function RootLayout({
 }) {
   return (
     <html lang="ja">
+      <head>
+        {/* 手動で追加が必要なiOS用メタタグ */}
+        <meta name="apple-mobile-web-app-capable" content="yes" />
+      </head>
       <body className={inter.className}>
         <AuthProvider>
           {children}
