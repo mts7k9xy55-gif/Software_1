@@ -27,7 +27,7 @@ export default function LoginForm() {
     setLoading(false)
   }
 
-  const handleOAuthSignIn = async (provider: 'google' | 'azure' | 'facebook') => {
+  const handleOAuthSignIn = async (provider: 'google' | 'twitter') => {
     setError(null)
     setLoading(true)
 
@@ -71,28 +71,14 @@ export default function LoginForm() {
           </button>
 
           <button
-            onClick={() => handleOAuthSignIn('azure')}
+            onClick={() => handleOAuthSignIn('twitter')}
             disabled={loading}
             className="w-full py-3 bg-white border-2 border-gray-300 rounded font-bold flex items-center justify-center gap-2 hover:bg-gray-50 disabled:opacity-50"
           >
-            <svg className="w-5 h-5" viewBox="0 0 24 24">
-              <path fill="#f25022" d="M1 1h10v10H1z"/>
-              <path fill="#00a4ef" d="M13 1h10v10H13z"/>
-              <path fill="#7fba00" d="M1 13h10v10H1z"/>
-              <path fill="#ffb900" d="M13 13h10v10H13z"/>
+            <svg className="w-5 h-5" viewBox="0 0 24 24" fill="#000000">
+              <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
             </svg>
-            Microsoftでログイン
-          </button>
-
-          <button
-            onClick={() => handleOAuthSignIn('facebook')}
-            disabled={loading}
-            className="w-full py-3 bg-white border-2 border-gray-300 rounded font-bold flex items-center justify-center gap-2 hover:bg-gray-50 disabled:opacity-50"
-          >
-            <svg className="w-5 h-5" viewBox="0 0 24 24" fill="#1877F2">
-              <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/>
-            </svg>
-            Facebookでログイン
+            X (Twitter) でログイン
           </button>
         </div>
 
