@@ -9,5 +9,8 @@
             "approve": true,
             "matchCommandLine": true
         }
-    }
+    },
+    "chat.agent.maxRequests": 50,
+    "chat.editor.fontSize": 15,
+    "chat.fontSize": 21
 }

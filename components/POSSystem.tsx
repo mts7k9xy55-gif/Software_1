@@ -51,13 +51,14 @@ export default function POSSystem() {
   // 店舗名入力モーダル
   const [showShopNameModal, setShowShopNameModal] = useState(false)
   const [shopNameInput, setShopNameInput] = useState('')
+  const [skipShopNamePrompt, setSkipShopNamePrompt] = useState(false)
 
   // 店舗名未設定時にモーダル表示
   useEffect(() => {
-    if (shopId && !isLoading && shopName === null) {
+    if (shopId && !isLoading && shopName === null && !skipShopNamePrompt) {
       setShowShopNameModal(true)
     }
-  }, [shopId, isLoading, shopName])
+  }, [shopId, isLoading, shopName, skipShopNamePrompt])
 
   // データ取得
   useEffect(() => {
@@ -399,13 +400,25 @@ export default function POSSystem() {
               className="w-full p-3 border rounded mb-4 text-lg"
               autoFocus
             />
-            <button
-              onClick={handleShopNameSubmit}
-              disabled={!shopNameInput.trim()}
-              className="w-full py-3 bg-blue-600 text-white font-bold rounded disabled:bg-gray-300"
-            >
-              保存する
-            </button>
+            <div className="flex gap-2">
+              <button
+                onClick={handleShopNameSubmit}
+                disabled={!shopNameInput.trim()}
+                className="flex-1 py-3 bg-blue-600 text-white font-bold rounded disabled:bg-gray-300"
+              >
+                保存する
+              </button>
+              <button
+                onClick={() => {
+                  setShowShopNameModal(false)
+                  setSkipShopNamePrompt(true)
+                  setShopNameInput('')
+                }}
+                className="flex-1 py-3 border rounded font-bold text-gray-600 hover:bg-gray-50"
+              >
+                今はスキップ
+              </button>
+            </div>
           </div>
         </div>
       )}
