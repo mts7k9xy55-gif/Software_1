@@ -81,9 +81,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const updateShopName = async (name: string) => {
     if (!user) return { error: new Error('Not authenticated') }
 
+    const payload = { id: user.id, name }
     const { error } = await supabase
       .from('shops')
-      .upsert({ id: user.id, name }, { onConflict: 'id' })
+      .upsert(payload, { onConflict: 'id' })
 
     if (!error) {
       setShopName(name)

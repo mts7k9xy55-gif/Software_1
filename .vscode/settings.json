@@ -12,5 +12,5 @@
     },
     "chat.agent.maxRequests": 50,
     "chat.editor.fontSize": 12,
-    "chat.fontSize": 21
+    "chat.fontSize": 18
 }
