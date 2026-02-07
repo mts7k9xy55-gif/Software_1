@@ -161,7 +161,7 @@ export default function TaxReport() {
     yPosition += 10
 
     // 販売記録数
-    pdf.setFont(undefined, 'normal')
+    pdf.setFont('helvetica', 'normal')
     pdf.setFontSize(9)
     pdf.text(`販売記録数: ${sales.length}件`, margin, yPosition)
 
