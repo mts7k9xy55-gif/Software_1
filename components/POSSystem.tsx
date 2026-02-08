@@ -191,6 +191,22 @@ function sanitizeSales(input: unknown[]): SaleRecord[] {
   })
 }
 
+type SupabaseLikeError = {
+  code?: string
+  message?: string
+}
+
+function isMissingColumnError(error: SupabaseLikeError | null, columnName: string): boolean {
+  if (!error) return false
+  const message = error.message ?? ''
+  return (
+    error.code === 'PGRST204' ||
+    error.code === '42703' ||
+    message.includes(columnName) ||
+    message.includes('schema cache')
+  )
+}
+
 export default function POSSystem() {
   const { user, shopId, shopName, signOut, updateShopName } = useAuth()
 
@@ -256,12 +272,36 @@ export default function POSSystem() {
       .eq('shop_id', shopId)
       .order('name', { ascending: true })
 
+    if (!error) {
+      setMenuItems(sanitizeMenuItems((data ?? []) as unknown[]))
+      return
+    }
+
+    // Legacy schema fallback (README 初期版): shop_id / tax_rate / only_* が無い場合
+    if (
+      isMissingColumnError(error, 'shop_id') ||
+      isMissingColumnError(error, 'tax_rate') ||
+      isMissingColumnError(error, 'only_takeout') ||
+      isMissingColumnError(error, 'only_eat_in')
+    ) {
+      const { data: legacyData, error: legacyError } = await supabase
+        .from('menu_items')
+        .select('id, name, price, image_url')
+        .order('name', { ascending: true })
+
+      if (legacyError) {
+        setNotice({ type: 'error', message: `商品取得に失敗しました: ${legacyError.message}` })
+        return
+      }
+
+      setMenuItems(sanitizeMenuItems((legacyData ?? []) as unknown[]))
+      return
+    }
+
     if (error) {
       setNotice({ type: 'error', message: `商品取得に失敗しました: ${error.message}` })
       return
     }
-
-    setMenuItems(sanitizeMenuItems((data ?? []) as unknown[]))
   }, [shopId])
 
   const fetchTodaySales = useCallback(async () => {
@@ -277,12 +317,32 @@ export default function POSSystem() {
       .lte('created_at', `${today}T23:59:59`)
       .order('created_at', { ascending: false })
 
+    if (!error) {
+      setTodaySales(sanitizeSales((data ?? []) as unknown[]))
+      return
+    }
+
+    if (isMissingColumnError(error, 'shop_id') || isMissingColumnError(error, 'tax_details')) {
+      const { data: legacyData, error: legacyError } = await supabase
+        .from('sales')
+        .select('id, items, total_amount, created_at')
+        .gte('created_at', `${today}T00:00:00`)
+        .lte('created_at', `${today}T23:59:59`)
+        .order('created_at', { ascending: false })
+
+      if (legacyError) {
+        setNotice({ type: 'error', message: `本日の売上取得に失敗しました: ${legacyError.message}` })
+        return
+      }
+
+      setTodaySales(sanitizeSales((legacyData ?? []) as unknown[]))
+      return
+    }
+
     if (error) {
       setNotice({ type: 'error', message: `本日の売上取得に失敗しました: ${error.message}` })
       return
     }
-
-    setTodaySales(sanitizeSales((data ?? []) as unknown[]))
   }, [shopId])
 
   const fetchPeriodSales = useCallback(async () => {
@@ -311,12 +371,32 @@ export default function POSSystem() {
 
     setIsPeriodLoading(false)
 
+    if (!error) {
+      setPeriodSales(sanitizeSales((data ?? []) as unknown[]))
+      return
+    }
+
+    if (isMissingColumnError(error, 'shop_id') || isMissingColumnError(error, 'tax_details')) {
+      const { data: legacyData, error: legacyError } = await supabase
+        .from('sales')
+        .select('id, items, total_amount, created_at')
+        .gte('created_at', `${startDate}T00:00:00`)
+        .lte('created_at', `${endDate}T23:59:59`)
+        .order('created_at', { ascending: false })
+
+      if (legacyError) {
+        setNotice({ type: 'error', message: `期間売上取得に失敗しました: ${legacyError.message}` })
+        return
+      }
+
+      setPeriodSales(sanitizeSales((legacyData ?? []) as unknown[]))
+      return
+    }
+
     if (error) {
       setNotice({ type: 'error', message: `期間売上取得に失敗しました: ${error.message}` })
       return
     }
-
-    setPeriodSales(sanitizeSales((data ?? []) as unknown[]))
   }, [endDate, shopId, startDate])
 
   useEffect(() => {
@@ -391,7 +471,17 @@ export default function POSSystem() {
       tax_details: toTaxDetails(cartSaleItems),
     }
 
-    const { error } = await supabase.from('sales').insert(payload)
+    let { error } = await supabase.from('sales').insert(payload)
+
+    if (error && (isMissingColumnError(error, 'shop_id') || isMissingColumnError(error, 'tax_details'))) {
+      const legacyPayload = {
+        items: cartSaleItems,
+        total_amount: cartSummary.grossSales,
+      }
+      const retry = await supabase.from('sales').insert(legacyPayload)
+      error = retry.error
+    }
+
     setIsSavingOrder(false)
 
     if (error) {
@@ -501,7 +591,7 @@ export default function POSSystem() {
       }
     }
 
-    const { error } = await supabase.from('menu_items').insert({
+    let { error } = await supabase.from('menu_items').insert({
       shop_id: shopId,
       name: trimmedName,
       price: Math.floor(parsedPrice),
@@ -511,6 +601,25 @@ export default function POSSystem() {
       only_takeout: newOnlyTakeout,
       only_eat_in: newOnlyEatIn,
     })
+
+    if (
+      error &&
+      (
+        isMissingColumnError(error, 'shop_id') ||
+        isMissingColumnError(error, 'tax_rate') ||
+        isMissingColumnError(error, 'only_takeout') ||
+        isMissingColumnError(error, 'only_eat_in')
+      )
+    ) {
+      const legacyPayload = {
+        name: trimmedName,
+        price: Math.floor(parsedPrice),
+        category: 'その他',
+        image_url: imageUrl,
+      }
+      const retry = await supabase.from('menu_items').insert(legacyPayload)
+      error = retry.error
+    }
 
     setIsUploading(false)
 
@@ -816,7 +925,7 @@ export default function POSSystem() {
                   表示できる商品がありません。メニュー管理で商品を登録してください。
                 </p>
               ) : (
-                <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-4">
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
                   {filteredMenuItems.map((item) => {
                     const line = calcLineTotals(item.price, 1, currentTaxRate)
                     return (
