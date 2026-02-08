@@ -2,15 +2,18 @@
 
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react'
 import { supabase } from '@/lib/supabase'
-import { User } from '@supabase/supabase-js'
+import { useClerk, useUser } from '@clerk/nextjs'
+
+export interface AppUser {
+  id: string
+  email: string | null
+}
 
 interface AuthContextType {
-  user: User | null
+  user: AppUser | null
   shopId: string | null
   shopName: string | null
   loading: boolean
-  signIn: (email: string, password: string) => Promise<{ error: Error | null }>
-  signUp: (email: string, password: string) => Promise<{ error: Error | null }>
   signOut: () => Promise<void>
   updateShopName: (name: string) => Promise<{ error: Error | null }>
 }
@@ -18,64 +21,51 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(null)
+  const { isLoaded, user: clerkUser } = useUser()
+  const { signOut: clerkSignOut } = useClerk()
+
   const [shopName, setShopName] = useState<string | null>(null)
-  const [loading, setLoading] = useState(true)
+  const [shopNameLoading, setShopNameLoading] = useState(true)
+
+  const user: AppUser | null = clerkUser
+    ? {
+        id: clerkUser.id,
+        email: clerkUser.primaryEmailAddress?.emailAddress ?? null,
+      }
+    : null
 
   useEffect(() => {
-    const persistSession = (session: any) => {
-      if (typeof window === 'undefined') return
-      if (session) {
-        window.localStorage.setItem('pos-auth-token', JSON.stringify(session))
-      }
-    }
+    const shopId = user?.id ?? null
 
-    const init = async () => {
-      const { data: { session } } = await supabase.auth.getSession()
-      if (session && session.expires_at && session.expires_at * 1000 > Date.now()) {
-        setUser(session.user)
-        fetchShopName(session.user.id)
-        persistSession(session)
-      } else {
-        setUser(null)
-        setShopName(null)
-      }
-      setLoading(false)
-    }
+    if (!isLoaded) return
 
-    init()
-
-    // 認証状態の変化を監視
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
-        persistSession(session)
-      }
-      setUser(session?.user ?? null)
-      if (session?.user) {
-        fetchShopName(session.user.id)
-      } else {
-        setShopName(null)
-      }
-    })
-
-    return () => subscription.unsubscribe()
-  }, [])
-
-  // 店舗名を取得
-  const fetchShopName = async (userId: string) => {
-    const { data, error } = await supabase
-      .from('shops')
-      .select('name')
-      .eq('id', userId)
-      .maybeSingle()
-
-    if (error) {
+    if (!shopId) {
       setShopName(null)
+      setShopNameLoading(false)
       return
     }
 
-    setShopName(data?.name ?? null)
-  }
+    const fetchShopName = async (userId: string) => {
+      setShopNameLoading(true)
+
+      const { data, error } = await supabase
+        .from('shops')
+        .select('name')
+        .eq('id', userId)
+        .maybeSingle()
+
+      if (error) {
+        setShopName(null)
+        setShopNameLoading(false)
+        return
+      }
+
+      setShopName(data?.name ?? null)
+      setShopNameLoading(false)
+    }
+
+    fetchShopName(shopId)
+  }, [isLoaded, user?.id])
 
   // 店舗名を更新
   const updateShopName = async (name: string) => {
@@ -92,25 +82,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return { error: error as Error | null }
   }
 
-  const signIn = async (email: string, password: string) => {
-    const { error } = await supabase.auth.signInWithPassword({ email, password })
-    return { error: error as Error | null }
-  }
-
-  const signUp = async (email: string, password: string) => {
-    const { error } = await supabase.auth.signUp({ email, password })
-    return { error: error as Error | null }
-  }
-
   const signOut = async () => {
-    await supabase.auth.signOut()
+    await clerkSignOut()
   }
 
   // shopId = user.id（店主ごとに一意）
   const shopId = user?.id ?? null
+  const loading = !isLoaded || shopNameLoading
 
   return (
-    <AuthContext.Provider value={{ user, shopId, shopName, loading, signIn, signUp, signOut, updateShopName }}>
+    <AuthContext.Provider value={{ user, shopId, shopName, loading, signOut, updateShopName }}>
       {children}
     </AuthContext.Provider>
   )

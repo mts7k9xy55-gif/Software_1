@@ -9,13 +9,17 @@ POSシステム - Supabase + Next.js + Shadcn/ui
 npm install
 ```
 
-2. `.env.local`にSupabase認証情報を追加:
+2. `.env.local`に環境変数を追加:
 ```
 NEXT_PUBLIC_SUPABASE_URL=your_supabase_url
 NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
+NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=your_clerk_publishable_key
+CLERK_SECRET_KEY=your_clerk_secret_key
 ```
 
-3. Supabaseテーブルを作成:
+3. Clerkダッシュボードで認証方式（メール、Google等）を有効化
+
+4. Supabaseテーブルを作成:
 
 ### menu_items テーブル
 ```sql
@@ -40,7 +44,7 @@ CREATE TABLE sales (
 );
 ```
 
-4. サンプルデータを追加:
+5. サンプルデータを追加:
 ```sql
 INSERT INTO menu_items (name, price, category, description) VALUES
   ('コーヒー', 400, '飲み物', '香り高いコーヒー'),
@@ -49,7 +53,7 @@ INSERT INTO menu_items (name, price, category, description) VALUES
   ('ケーキ', 500, 'デザート', '手作りケーキ');
 ```
 
-5. 開発サーバーを起動:
+6. 開発サーバーを起動:
 ```bash
 npm run dev
 ```

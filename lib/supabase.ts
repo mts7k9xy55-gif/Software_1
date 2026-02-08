@@ -1,12 +1,19 @@
 import { createClient } from '@supabase/supabase-js'
 
-// 以前の import { Database } ... は消す！
-// 型定義なんていらない！動けばいい！
+const supabaseUrl =
+	process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://placeholder.supabase.co'
+const supabaseAnonKey =
+	process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'placeholder-anon-key'
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+if (
+	typeof window !== 'undefined' &&
+	(!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY)
+) {
+	console.warn(
+		'[supabase] NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY が未設定です。'
+	)
+}
 
-// <Database> も消す！
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
 	auth: {
 		persistSession: true,
