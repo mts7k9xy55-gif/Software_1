@@ -2,6 +2,7 @@
 
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react'
 import { supabase } from '@/lib/supabase'
+import { isInvalidUuidError, toDeterministicUuid } from '@/lib/supabaseHelpers'
 import { useClerk, useUser } from '@clerk/nextjs'
 
 export interface AppUser {
@@ -48,11 +49,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const fetchShopName = async (userId: string) => {
       setShopNameLoading(true)
 
-      const { data, error } = await supabase
+      let { data, error } = await supabase
         .from('shops')
         .select('name')
         .eq('id', userId)
         .maybeSingle()
+
+      if (isInvalidUuidError(error)) {
+        const fallbackId = toDeterministicUuid(userId)
+        const retry = await supabase.from('shops').select('name').eq('id', fallbackId).maybeSingle()
+        data = retry.data
+        error = retry.error
+      }
 
       if (error) {
         setShopName(null)
@@ -71,10 +79,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const updateShopName = async (name: string) => {
     if (!user) return { error: new Error('Not authenticated') }
 
-    const payload = { id: user.id, name }
-    const { error } = await supabase
+    let payload = { id: user.id, name }
+    let { error } = await supabase
       .from('shops')
       .upsert(payload, { onConflict: 'id' })
+
+    if (isInvalidUuidError(error)) {
+      payload = { id: toDeterministicUuid(user.id), name }
+      const retry = await supabase.from('shops').upsert(payload, { onConflict: 'id' })
+      error = retry.error
+    }
 
     if (!error) {
       setShopName(name)

@@ -10,6 +10,9 @@ export const metadata: Metadata = {
   title: 'ALLGOAI POS',
   description: 'Software eating the local',
   manifest: '/manifest.json', // PWA設定をここに追加
+  other: {
+    'mobile-web-app-capable': 'yes',
+  },
   appleWebApp: {
     capable: true,
     statusBarStyle: 'black-translucent',
@@ -24,10 +27,6 @@ export default function RootLayout({
 }) {
   return (
     <html lang="ja">
-      <head>
-        {/* 手動で追加が必要なiOS用メタタグ */}
-        <meta name="apple-mobile-web-app-capable" content="yes" />
-      </head>
       <body className={inter.className}>
         <ClerkProvider>
           <AuthProvider>

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
+import { isInvalidUuidError, toDeterministicUuid } from '@/lib/supabaseHelpers'
 import {
   calcLineTotals,
   normalizeTaxRate,
@@ -52,6 +53,23 @@ interface SaleRecord {
   created_at: string
   shop_id: string
   tax_details?: TaxDetail[]
+}
+
+interface ExpenseRecord {
+  id: string
+  shop_id: string
+  expense_date: string
+  amount: number
+  description: string
+  receipt_url: string | null
+  created_at: string
+}
+
+interface InventoryAdjustmentRecord {
+  id: string
+  shop_id: string
+  fiscal_year: number
+  amount: number
 }
 
 interface CartItem extends MenuItem {
@@ -191,12 +209,22 @@ function sanitizeSales(input: unknown[]): SaleRecord[] {
   })
 }
 
-type SupabaseLikeError = {
-  code?: string
-  message?: string
+function sanitizeExpenses(input: unknown[]): ExpenseRecord[] {
+  return input.map((row) => {
+    const record = row as Partial<ExpenseRecord>
+    return {
+      id: String(record.id ?? ''),
+      shop_id: String(record.shop_id ?? ''),
+      expense_date: String(record.expense_date ?? ''),
+      amount: Math.max(0, Math.floor(Number(record.amount ?? 0))),
+      description: String(record.description ?? ''),
+      receipt_url: record.receipt_url ?? null,
+      created_at: String(record.created_at ?? ''),
+    }
+  })
 }
 
-function isMissingColumnError(error: SupabaseLikeError | null, columnName: string): boolean {
+function isMissingColumnError(error: { code?: string; message?: string } | null, columnName: string): boolean {
   if (!error) return false
   const message = error.message ?? ''
   return (
@@ -204,6 +232,17 @@ function isMissingColumnError(error: SupabaseLikeError | null, columnName: strin
     error.code === '42703' ||
     message.includes(columnName) ||
     message.includes('schema cache')
+  )
+}
+
+function isMissingTableError(error: { code?: string; message?: string } | null): boolean {
+  if (!error) return false
+  const message = error.message ?? ''
+  return (
+    error.code === 'PGRST205' ||
+    error.code === '42P01' ||
+    message.includes('Could not find the table') ||
+    message.includes('does not exist')
   )
 }
 
@@ -239,7 +278,22 @@ export default function POSSystem() {
   const [shopNameInput, setShopNameInput] = useState('')
   const [skipShopNamePrompt, setSkipShopNamePrompt] = useState(false)
 
+  const [expenses, setExpenses] = useState<ExpenseRecord[]>([])
+  const [isExpenseLoading, setIsExpenseLoading] = useState(false)
+  const [isSavingExpense, setIsSavingExpense] = useState(false)
+  const [expenseDate, setExpenseDate] = useState<string>(() => toDateInputValue(new Date()))
+  const [expenseAmount, setExpenseAmount] = useState('')
+  const [expenseDescription, setExpenseDescription] = useState('')
+  const [expenseReceiptFile, setExpenseReceiptFile] = useState<File | null>(null)
+  const [expenseReceiptPreview, setExpenseReceiptPreview] = useState<string | null>(null)
+
+  const [inventoryYear, setInventoryYear] = useState<string>(() => String(new Date().getFullYear()))
+  const [inventoryAmount, setInventoryAmount] = useState('')
+  const [isSavingInventory, setIsSavingInventory] = useState(false)
+
   const currentTaxRate = TAX_RATE_BY_MODE[taxMode]
+  const uuidShopId = useMemo(() => (shopId ? toDeterministicUuid(shopId) : null), [shopId])
+  const activeShopId = useMemo(() => uuidShopId ?? shopId, [shopId, uuidShopId])
 
   const filteredMenuItems = useMemo(() => {
     return menuItems.filter((item) => {
@@ -262,15 +316,38 @@ export default function POSSystem() {
   const todaySummary = useMemo(() => summarizeSales(todaySales), [todaySales])
   const periodSummary = useMemo(() => summarizeSales(periodSales), [periodSales])
   const periodDailySummary = useMemo(() => summarizeDailySales(periodSales), [periodSales])
+  const periodExpenseTotal = useMemo(
+    () => expenses.reduce((sum, expense) => sum + expense.amount, 0),
+    [expenses]
+  )
+  const inventoryAdjustmentAmount = useMemo(() => {
+    const amount = Number(inventoryAmount)
+    if (!Number.isFinite(amount) || amount < 0) return 0
+    return Math.floor(amount)
+  }, [inventoryAmount])
+  const periodProfit = useMemo(
+    () => periodSummary.grossSales - periodExpenseTotal - inventoryAdjustmentAmount,
+    [periodSummary.grossSales, periodExpenseTotal, inventoryAdjustmentAmount]
+  )
 
   const fetchMenuItems = useCallback(async () => {
     if (!shopId) return
 
-    const { data, error } = await supabase
+    let { data, error } = await supabase
       .from('menu_items')
       .select('id, name, price, tax_rate, image_url, shop_id, only_takeout, only_eat_in')
       .eq('shop_id', shopId)
       .order('name', { ascending: true })
+
+    if (isInvalidUuidError(error) && uuidShopId) {
+      const retry = await supabase
+        .from('menu_items')
+        .select('id, name, price, tax_rate, image_url, shop_id, only_takeout, only_eat_in')
+        .eq('shop_id', uuidShopId)
+        .order('name', { ascending: true })
+      data = retry.data
+      error = retry.error
+    }
 
     if (!error) {
       setMenuItems(sanitizeMenuItems((data ?? []) as unknown[]))
@@ -309,13 +386,25 @@ export default function POSSystem() {
 
     const today = toDateInputValue(new Date())
 
-    const { data, error } = await supabase
+    let { data, error } = await supabase
       .from('sales')
       .select('id, items, total_amount, created_at, shop_id, tax_details')
       .eq('shop_id', shopId)
       .gte('created_at', `${today}T00:00:00`)
       .lte('created_at', `${today}T23:59:59`)
       .order('created_at', { ascending: false })
+
+    if (isInvalidUuidError(error) && uuidShopId) {
+      const retry = await supabase
+        .from('sales')
+        .select('id, items, total_amount, created_at, shop_id, tax_details')
+        .eq('shop_id', uuidShopId)
+        .gte('created_at', `${today}T00:00:00`)
+        .lte('created_at', `${today}T23:59:59`)
+        .order('created_at', { ascending: false })
+      data = retry.data
+      error = retry.error
+    }
 
     if (!error) {
       setTodaySales(sanitizeSales((data ?? []) as unknown[]))
@@ -343,7 +432,71 @@ export default function POSSystem() {
       setNotice({ type: 'error', message: `本日の売上取得に失敗しました: ${error.message}` })
       return
     }
-  }, [shopId])
+  }, [shopId, uuidShopId])
+
+  const fetchPeriodExpenses = useCallback(async () => {
+    if (!activeShopId) return
+
+    if (!startDate || !endDate || startDate > endDate) {
+      return
+    }
+
+    setIsExpenseLoading(true)
+
+    const { data, error } = await supabase
+      .from('expenses')
+      .select('id, shop_id, expense_date, amount, description, receipt_url, created_at')
+      .eq('shop_id', activeShopId)
+      .gte('expense_date', startDate)
+      .lte('expense_date', endDate)
+      .order('expense_date', { ascending: false })
+      .order('created_at', { ascending: false })
+
+    setIsExpenseLoading(false)
+
+    if (error) {
+      if (isMissingTableError(error)) {
+        setExpenses([])
+        setNotice({
+          type: 'error',
+          message:
+            '経費帳テーブルが未作成です。Supabaseに expenses / inventory_adjustments を作成してください。',
+        })
+        return
+      }
+
+      setNotice({ type: 'error', message: `経費取得に失敗しました: ${error.message}` })
+      return
+    }
+
+    setExpenses(sanitizeExpenses((data ?? []) as unknown[]))
+  }, [activeShopId, endDate, startDate])
+
+  const fetchInventoryAdjustment = useCallback(async () => {
+    if (!activeShopId) return
+
+    const parsedYear = Number(inventoryYear)
+    if (!Number.isInteger(parsedYear)) return
+
+    const { data, error } = await supabase
+      .from('inventory_adjustments')
+      .select('id, shop_id, fiscal_year, amount')
+      .eq('shop_id', activeShopId)
+      .eq('fiscal_year', parsedYear)
+      .maybeSingle()
+
+    if (error) {
+      if (isMissingTableError(error)) {
+        setInventoryAmount('')
+        return
+      }
+      setNotice({ type: 'error', message: `在庫調整額の取得に失敗しました: ${error.message}` })
+      return
+    }
+
+    const record = data as InventoryAdjustmentRecord | null
+    setInventoryAmount(record ? String(record.amount) : '')
+  }, [activeShopId, inventoryYear])
 
   const fetchPeriodSales = useCallback(async () => {
     if (!shopId) return
@@ -361,7 +514,7 @@ export default function POSSystem() {
     setIsPeriodLoading(true)
     setNotice(null)
 
-    const { data, error } = await supabase
+    let { data, error } = await supabase
       .from('sales')
       .select('id, items, total_amount, created_at, shop_id, tax_details')
       .eq('shop_id', shopId)
@@ -369,10 +522,23 @@ export default function POSSystem() {
       .lte('created_at', `${endDate}T23:59:59`)
       .order('created_at', { ascending: false })
 
+    if (isInvalidUuidError(error) && uuidShopId) {
+      const retry = await supabase
+        .from('sales')
+        .select('id, items, total_amount, created_at, shop_id, tax_details')
+        .eq('shop_id', uuidShopId)
+        .gte('created_at', `${startDate}T00:00:00`)
+        .lte('created_at', `${endDate}T23:59:59`)
+        .order('created_at', { ascending: false })
+      data = retry.data
+      error = retry.error
+    }
+
     setIsPeriodLoading(false)
 
     if (!error) {
       setPeriodSales(sanitizeSales((data ?? []) as unknown[]))
+      await fetchPeriodExpenses()
       return
     }
 
@@ -390,6 +556,7 @@ export default function POSSystem() {
       }
 
       setPeriodSales(sanitizeSales((legacyData ?? []) as unknown[]))
+      await fetchPeriodExpenses()
       return
     }
 
@@ -397,7 +564,7 @@ export default function POSSystem() {
       setNotice({ type: 'error', message: `期間売上取得に失敗しました: ${error.message}` })
       return
     }
-  }, [endDate, shopId, startDate])
+  }, [endDate, shopId, startDate, uuidShopId, fetchPeriodExpenses])
 
   useEffect(() => {
     if (!shopId) return
@@ -419,6 +586,11 @@ export default function POSSystem() {
       setShowShopNameModal(true)
     }
   }, [shopId, isInitialLoading, shopName, skipShopNamePrompt])
+
+  useEffect(() => {
+    if (mode !== 'tax') return
+    void fetchInventoryAdjustment()
+  }, [mode, fetchInventoryAdjustment])
 
   const addItemToCart = (item: MenuItem) => {
     setNotice(null)
@@ -458,14 +630,36 @@ export default function POSSystem() {
     setCart([])
   }
 
+  const ensureShopRecord = useCallback(async (): Promise<string | null> => {
+    if (!activeShopId) return null
+
+    const fallbackShopName = shopName?.trim() || user?.email?.split('@')[0] || '店舗'
+    const { error } = await supabase
+      .from('shops')
+      .upsert({ id: activeShopId, name: fallbackShopName }, { onConflict: 'id' })
+
+    if (error) {
+      setNotice({ type: 'error', message: `店舗情報の初期化に失敗しました: ${error.message}` })
+      return null
+    }
+
+    return activeShopId
+  }, [activeShopId, shopName, user?.email])
+
   const handleCheckout = async () => {
     if (!shopId || cartSaleItems.length === 0) return
 
     setIsSavingOrder(true)
     setNotice(null)
 
+    const ensuredShopId = await ensureShopRecord()
+    if (!ensuredShopId) {
+      setIsSavingOrder(false)
+      return
+    }
+
     const payload = {
-      shop_id: shopId,
+      shop_id: ensuredShopId,
       items: cartSaleItems,
       total_amount: cartSummary.grossSales,
       tax_details: toTaxDetails(cartSaleItems),
@@ -473,8 +667,17 @@ export default function POSSystem() {
 
     let { error } = await supabase.from('sales').insert(payload)
 
+    if (isInvalidUuidError(error) && uuidShopId) {
+      const retryWithUuid = await supabase.from('sales').insert({
+        ...payload,
+        shop_id: uuidShopId,
+      })
+      error = retryWithUuid.error
+    }
+
     if (error && (isMissingColumnError(error, 'shop_id') || isMissingColumnError(error, 'tax_details'))) {
       const legacyPayload = {
+        shop_id: ensuredShopId,
         items: cartSaleItems,
         total_amount: cartSummary.grossSales,
       }
@@ -544,10 +747,10 @@ export default function POSSystem() {
   }
 
   const uploadImage = async (file: File): Promise<string | null> => {
-    if (!shopId) return null
+    if (!activeShopId) return null
 
     const extension = file.name.includes('.') ? file.name.split('.').pop() : 'jpg'
-    const fileName = `${shopId}/${Date.now()}.${extension}`
+    const fileName = `${activeShopId}/${Date.now()}.${extension}`
 
     const { error } = await supabase.storage.from('product-images').upload(fileName, file)
     if (error) {
@@ -561,10 +764,199 @@ export default function POSSystem() {
     return publicUrl
   }
 
+  const handleExpenseReceiptChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+
+    setExpenseReceiptFile(file)
+    const reader = new FileReader()
+    reader.onloadend = () => {
+      setExpenseReceiptPreview(typeof reader.result === 'string' ? reader.result : null)
+    }
+    reader.readAsDataURL(file)
+  }
+
+  const uploadExpenseReceipt = async (file: File): Promise<string | null> => {
+    if (!activeShopId) return null
+
+    const extension = file.name.includes('.') ? file.name.split('.').pop() : 'jpg'
+    const fileName = `${activeShopId}/${expenseDate}/${Date.now()}.${extension}`
+
+    const { error } = await supabase.storage.from('expense-receipts').upload(fileName, file)
+    if (error) return null
+
+    const {
+      data: { publicUrl },
+    } = supabase.storage.from('expense-receipts').getPublicUrl(fileName)
+
+    return publicUrl
+  }
+
+  const handleExpenseSubmit = async (event: React.FormEvent) => {
+    event.preventDefault()
+    if (!shopId) return
+
+    const ensuredShopId = await ensureShopRecord()
+    if (!ensuredShopId) return
+
+    const amount = Number(expenseAmount)
+    const description = expenseDescription.trim()
+
+    if (!expenseDate) {
+      setNotice({ type: 'error', message: '経費の日付を入力してください。' })
+      return
+    }
+    if (!description) {
+      setNotice({ type: 'error', message: '経費内容を入力してください。' })
+      return
+    }
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setNotice({ type: 'error', message: '経費金額は1円以上で入力してください。' })
+      return
+    }
+
+    setIsSavingExpense(true)
+    setNotice(null)
+
+    let receiptUrl: string | null = null
+    if (expenseReceiptFile) {
+      receiptUrl = await uploadExpenseReceipt(expenseReceiptFile)
+      if (!receiptUrl) {
+        setIsSavingExpense(false)
+        setNotice({
+          type: 'error',
+          message: 'レシート画像のアップロードに失敗しました。bucket: expense-receipts を確認してください。',
+        })
+        return
+      }
+    }
+
+    const { error } = await supabase.from('expenses').insert({
+      shop_id: ensuredShopId,
+      expense_date: expenseDate,
+      amount: Math.floor(amount),
+      description,
+      receipt_url: receiptUrl,
+    })
+
+    setIsSavingExpense(false)
+
+    if (error) {
+      if (isMissingTableError(error)) {
+        setNotice({
+          type: 'error',
+          message:
+            '経費帳テーブルが未作成です。Supabaseに expenses / inventory_adjustments を作成してください。',
+        })
+        return
+      }
+      setNotice({ type: 'error', message: `経費登録に失敗しました: ${error.message}` })
+      return
+    }
+
+    setExpenseAmount('')
+    setExpenseDescription('')
+    setExpenseReceiptFile(null)
+    setExpenseReceiptPreview(null)
+    await fetchPeriodExpenses()
+    setNotice({ type: 'success', message: '経費を保存しました。' })
+  }
+
+  const deleteExpense = async (expenseId: string) => {
+    const shouldDelete = window.confirm('この経費を削除しますか？')
+    if (!shouldDelete) return
+
+    const { error } = await supabase.from('expenses').delete().eq('id', expenseId)
+    if (error) {
+      setNotice({ type: 'error', message: `経費削除に失敗しました: ${error.message}` })
+      return
+    }
+
+    await fetchPeriodExpenses()
+    setNotice({ type: 'success', message: '経費を削除しました。' })
+  }
+
+  const handleSaveInventoryAdjustment = async () => {
+    if (!shopId) return
+
+    const ensuredShopId = await ensureShopRecord()
+    if (!ensuredShopId) return
+
+    const fiscalYear = Number(inventoryYear)
+    const amount = Number(inventoryAmount)
+
+    if (!Number.isInteger(fiscalYear) || fiscalYear < 2000 || fiscalYear > 9999) {
+      setNotice({ type: 'error', message: '在庫年は4桁の西暦で入力してください。' })
+      return
+    }
+    if (!Number.isFinite(amount) || amount < 0) {
+      setNotice({ type: 'error', message: '在庫合計額は0円以上で入力してください。' })
+      return
+    }
+
+    setIsSavingInventory(true)
+    setNotice(null)
+
+    let { error } = await supabase.from('inventory_adjustments').upsert(
+      {
+        shop_id: ensuredShopId,
+        fiscal_year: fiscalYear,
+        amount: Math.floor(amount),
+      },
+      { onConflict: 'shop_id,fiscal_year' }
+    )
+
+    if (error && error.code === '42P10') {
+      const existing = await supabase
+        .from('inventory_adjustments')
+        .select('id')
+        .eq('shop_id', ensuredShopId)
+        .eq('fiscal_year', fiscalYear)
+        .maybeSingle()
+
+      if (existing.error) {
+        error = existing.error
+      } else if (existing.data) {
+        const updateResult = await supabase
+          .from('inventory_adjustments')
+          .update({ amount: Math.floor(amount) })
+          .eq('id', (existing.data as { id: string }).id)
+        error = updateResult.error
+      } else {
+        const insertResult = await supabase.from('inventory_adjustments').insert({
+          shop_id: ensuredShopId,
+          fiscal_year: fiscalYear,
+          amount: Math.floor(amount),
+        })
+        error = insertResult.error
+      }
+    }
+
+    setIsSavingInventory(false)
+
+    if (error) {
+      if (isMissingTableError(error)) {
+        setNotice({
+          type: 'error',
+          message:
+            '在庫調整テーブルが未作成です。Supabaseに expenses / inventory_adjustments を作成してください。',
+        })
+        return
+      }
+      setNotice({ type: 'error', message: `在庫調整額の保存に失敗しました: ${error.message}` })
+      return
+    }
+
+    setNotice({ type: 'success', message: `${inventoryYear}年の在庫合計額を保存しました。` })
+  }
+
   const handleProductSubmit = async (event: React.FormEvent) => {
     event.preventDefault()
 
     if (!shopId) return
+    const ensuredShopId = await ensureShopRecord()
+    if (!ensuredShopId) return
+
     const trimmedName = newName.trim()
     const parsedPrice = Number(newPrice)
 
@@ -592,7 +984,7 @@ export default function POSSystem() {
     }
 
     let { error } = await supabase.from('menu_items').insert({
-      shop_id: shopId,
+      shop_id: ensuredShopId,
       name: trimmedName,
       price: Math.floor(parsedPrice),
       tax_rate: 10,
@@ -601,6 +993,20 @@ export default function POSSystem() {
       only_takeout: newOnlyTakeout,
       only_eat_in: newOnlyEatIn,
     })
+
+    if (isInvalidUuidError(error) && uuidShopId) {
+      const retryWithUuid = await supabase.from('menu_items').insert({
+        shop_id: ensuredShopId,
+        name: trimmedName,
+        price: Math.floor(parsedPrice),
+        tax_rate: 10,
+        category: 'その他',
+        image_url: imageUrl,
+        only_takeout: newOnlyTakeout,
+        only_eat_in: newOnlyEatIn,
+      })
+      error = retryWithUuid.error
+    }
 
     if (
       error &&
@@ -612,6 +1018,7 @@ export default function POSSystem() {
       )
     ) {
       const legacyPayload = {
+        shop_id: ensuredShopId,
         name: trimmedName,
         price: Math.floor(parsedPrice),
         category: 'その他',
@@ -1307,6 +1714,219 @@ export default function POSSystem() {
                   </button>
                 </div>
               </div>
+            </div>
+
+            <div className="mt-4 grid gap-4 xl:grid-cols-[1.4fr_1fr]">
+              <section className="rounded-xl border border-slate-200 p-4">
+                <h3 className="text-lg font-bold text-slate-900">超シンプル経費帳</h3>
+                <p className="mt-1 text-sm text-slate-500">
+                  日付・金額・内容・レシート写真だけ記録します（期間内データを表示）。
+                </p>
+
+                <form onSubmit={handleExpenseSubmit} className="mt-4 grid gap-3 md:grid-cols-2">
+                  <div>
+                    <label className="mb-1 block text-sm font-semibold">日付</label>
+                    <input
+                      type="date"
+                      value={expenseDate}
+                      onChange={(event) => setExpenseDate(event.target.value)}
+                      className="w-full rounded-lg border border-slate-300 p-2"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-sm font-semibold">金額</label>
+                    <input
+                      type="number"
+                      min={1}
+                      value={expenseAmount}
+                      onChange={(event) => setExpenseAmount(event.target.value)}
+                      placeholder="例: 1200"
+                      className="w-full rounded-lg border border-slate-300 p-2"
+                      required
+                    />
+                  </div>
+                  <div className="md:col-span-2">
+                    <label className="mb-1 block text-sm font-semibold">内容</label>
+                    <input
+                      type="text"
+                      value={expenseDescription}
+                      onChange={(event) => setExpenseDescription(event.target.value)}
+                      placeholder="例: 包装資材"
+                      className="w-full rounded-lg border border-slate-300 p-2"
+                      required
+                    />
+                  </div>
+                  <div className="md:col-span-2">
+                    <label className="mb-1 block text-sm font-semibold">レシート写真（任意）</label>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      capture="environment"
+                      onChange={handleExpenseReceiptChange}
+                      className="w-full rounded-lg border border-slate-300 bg-white p-2"
+                    />
+                    {expenseReceiptPreview && (
+                      <img
+                        src={expenseReceiptPreview}
+                        alt="レシートプレビュー"
+                        className="mt-2 h-24 w-24 rounded-lg border border-slate-300 object-cover"
+                      />
+                    )}
+                  </div>
+                  <div className="md:col-span-2">
+                    <button
+                      type="submit"
+                      disabled={isSavingExpense}
+                      className="w-full rounded-lg bg-blue-600 px-4 py-3 font-bold text-white disabled:bg-slate-400"
+                    >
+                      {isSavingExpense ? '保存中...' : '経費を保存'}
+                    </button>
+                  </div>
+                </form>
+
+                <div className="mt-4 rounded-lg bg-slate-50 p-3 text-sm">
+                  <div className="flex justify-between">
+                    <span>期間経費合計</span>
+                    <span className="font-bold">{formatYen(periodExpenseTotal)}</span>
+                  </div>
+                </div>
+
+                <div className="mt-3 max-h-56 overflow-y-auto rounded-lg border border-slate-200">
+                  <table className="w-full text-sm">
+                    <thead className="sticky top-0 bg-slate-100">
+                      <tr>
+                        <th className="p-2 text-left">日付</th>
+                        <th className="p-2 text-left">内容</th>
+                        <th className="p-2 text-right">金額</th>
+                        <th className="p-2 text-center">レシート</th>
+                        <th className="p-2 text-center">削除</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {isExpenseLoading ? (
+                        <tr>
+                          <td colSpan={5} className="p-3 text-center text-slate-500">
+                            経費を読み込み中...
+                          </td>
+                        </tr>
+                      ) : expenses.length === 0 ? (
+                        <tr>
+                          <td colSpan={5} className="p-3 text-center text-slate-500">
+                            この期間の経費はまだありません。
+                          </td>
+                        </tr>
+                      ) : (
+                        expenses.map((expense) => (
+                          <tr key={expense.id} className="border-b border-slate-100">
+                            <td className="p-2">{formatDate(`${expense.expense_date}T00:00:00`)}</td>
+                            <td className="p-2">{expense.description}</td>
+                            <td className="p-2 text-right font-semibold">{formatYen(expense.amount)}</td>
+                            <td className="p-2 text-center">
+                              {expense.receipt_url ? (
+                                <a
+                                  href={expense.receipt_url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="text-blue-600 underline"
+                                >
+                                  表示
+                                </a>
+                              ) : (
+                                <span className="text-slate-400">-</span>
+                              )}
+                            </td>
+                            <td className="p-2 text-center">
+                              <button
+                                onClick={() => deleteExpense(expense.id)}
+                                className="rounded border border-red-200 px-2 py-1 text-xs text-red-600"
+                              >
+                                削除
+                              </button>
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+
+              <section className="space-y-4">
+                <div className="rounded-xl border border-slate-200 p-4">
+                  <h3 className="text-lg font-bold text-slate-900">在庫調整（年1回）</h3>
+                  <p className="mt-1 text-sm text-slate-500">
+                    年末在庫の合計額を1つだけ入力し、利益計算に反映します。
+                  </p>
+
+                  <div className="mt-3 grid gap-3">
+                    <div>
+                      <label className="mb-1 block text-sm font-semibold">対象年</label>
+                      <input
+                        type="number"
+                        min={2000}
+                        max={9999}
+                        value={inventoryYear}
+                        onChange={(event) => setInventoryYear(event.target.value)}
+                        className="w-full rounded-lg border border-slate-300 p-2"
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-sm font-semibold">在庫の合計額</label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={inventoryAmount}
+                        onChange={(event) => setInventoryAmount(event.target.value)}
+                        placeholder="例: 300000"
+                        className="w-full rounded-lg border border-slate-300 p-2"
+                      />
+                    </div>
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      <button
+                        onClick={handleSaveInventoryAdjustment}
+                        disabled={isSavingInventory}
+                        className="rounded-lg bg-slate-900 px-4 py-2 font-bold text-white disabled:bg-slate-400"
+                      >
+                        {isSavingInventory ? '保存中...' : '在庫額を保存'}
+                      </button>
+                      <button
+                        onClick={fetchInventoryAdjustment}
+                        className="rounded-lg border border-slate-300 px-4 py-2 font-semibold"
+                      >
+                        読み直し
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                  <h3 className="text-lg font-bold text-slate-900">利益ダッシュボード</h3>
+                  <p className="mt-1 text-sm text-slate-500">売上 - 経費 - 在庫調整 = 利益</p>
+
+                  <div className="mt-3 space-y-2 text-sm">
+                    <div className="flex justify-between rounded-md bg-white px-3 py-2">
+                      <span>売上（税込）</span>
+                      <span className="font-bold">{formatYen(periodSummary.grossSales)}</span>
+                    </div>
+                    <div className="flex justify-between rounded-md bg-white px-3 py-2">
+                      <span>経費合計</span>
+                      <span className="font-bold">-{formatYen(periodExpenseTotal)}</span>
+                    </div>
+                    <div className="flex justify-between rounded-md bg-white px-3 py-2">
+                      <span>在庫調整（{inventoryYear}年）</span>
+                      <span className="font-bold">-{formatYen(inventoryAdjustmentAmount)}</span>
+                    </div>
+                    <div className="flex justify-between rounded-md border border-slate-300 bg-white px-3 py-3 text-base">
+                      <span className="font-bold">利益</span>
+                      <span className={`font-black ${periodProfit >= 0 ? 'text-emerald-700' : 'text-red-700'}`}>
+                        {periodProfit < 0 ? '-' : ''}
+                        {formatYen(Math.abs(periodProfit))}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </section>
             </div>
 
             {periodSales.length > 0 ? (
