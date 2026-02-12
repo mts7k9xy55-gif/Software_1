@@ -49,26 +49,37 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const fetchShopName = async (userId: string) => {
       setShopNameLoading(true)
 
-      let { data, error } = await supabase
-        .from('shops')
-        .select('name')
-        .eq('id', userId)
-        .maybeSingle()
+      const deterministicId = toDeterministicUuid(userId)
+      const primary = await supabase.from('shops').select('name').eq('id', deterministicId).maybeSingle()
 
-      if (isInvalidUuidError(error)) {
-        const fallbackId = toDeterministicUuid(userId)
-        const retry = await supabase.from('shops').select('name').eq('id', fallbackId).maybeSingle()
-        data = retry.data
-        error = retry.error
-      }
-
-      if (error) {
+      if (primary.error) {
         setShopName(null)
         setShopNameLoading(false)
         return
       }
 
-      setShopName(data?.name ?? null)
+      // uuidスキーマが前提。古いtextスキーマだった場合のみ生IDで再試行する（400ノイズ回避）。
+      if (primary.data?.name != null) {
+        setShopName(primary.data.name ?? null)
+        setShopNameLoading(false)
+        return
+      }
+
+      const looksLikeUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(userId)
+      if (!looksLikeUuid) {
+        setShopName(null)
+        setShopNameLoading(false)
+        return
+      }
+
+      const legacy = await supabase.from('shops').select('name').eq('id', userId).maybeSingle()
+      if (legacy.error) {
+        setShopName(null)
+        setShopNameLoading(false)
+        return
+      }
+
+      setShopName(legacy.data?.name ?? null)
       setShopNameLoading(false)
     }
 
@@ -79,16 +90,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const updateShopName = async (name: string) => {
     if (!user) return { error: new Error('Not authenticated') }
 
-    let payload = { id: user.id, name }
-    let { error } = await supabase
-      .from('shops')
-      .upsert(payload, { onConflict: 'id' })
-
-    if (isInvalidUuidError(error)) {
-      payload = { id: toDeterministicUuid(user.id), name }
-      const retry = await supabase.from('shops').upsert(payload, { onConflict: 'id' })
-      error = retry.error
-    }
+    const payload = { id: toDeterministicUuid(user.id), name }
+    let { error } = await supabase.from('shops').upsert(payload, { onConflict: 'id' })
 
     if (!error) {
       setShopName(name)

@@ -15,6 +15,13 @@ NEXT_PUBLIC_SUPABASE_URL=your_supabase_url
 NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
 NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=your_clerk_publishable_key
 CLERK_SECRET_KEY=your_clerk_secret_key
+GROQ_API_KEY=your_groq_api_key
+GROQ_MODEL=openai/gpt-oss-20b
+GEMINI_API_KEY=your_gemini_api_key
+GEMINI_MODEL=gemini-2.5-flash-lite
+OLLAMA_BASE_URL=http://127.0.0.1:11434
+OLLAMA_MODEL=qwen3:8b
+ENABLE_OLLAMA=1
 ```
 
 3. Clerkダッシュボードで認証方式（メール、Google等）を有効化
@@ -67,3 +74,10 @@ npm run dev
 - ✅ 注文の削除機能
 - ✅ 決済ボタンでsalesテーブルにデータを保存
 - ✅ Shadcn/uiのコンポーネントを使用
+- ✅ 税務モードのワンタップ申告パック出力（CSV/JSON/README）
+- ✅ 申告準備度チェック（BLOCKER/REVIEW/READY）と税理士向け引き継ぎメモ
+
+## 設計ドキュメント
+
+- `docs/DESIGN_EXECUTION_PLAN_2026-02.md`: 設計を実装に落とすための運用計画
+- `docs/TAX_PACK_SPEC.md`: 申告パックの出力仕様とブロッキングポリシー

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth'
 import { isInvalidUuidError, toDeterministicUuid } from '@/lib/supabaseHelpers'
+import JSZip from 'jszip'
 import {
   calcLineTotals,
   normalizeTaxRate,
@@ -11,6 +12,17 @@ import {
   summarizeItems,
   summarizeSales,
 } from '@/lib/accounting'
+import {
+  classifyExpenses,
+  summarizeClassifiedExpenses,
+  type ClassifiedExpense,
+} from '@/lib/taxAutopilot'
+import {
+  buildFilingReadiness,
+  type FilingItemStatus,
+  type FilingReadiness,
+  type FilingReadinessStatus,
+} from '@/lib/filingReadiness'
 
 type AppMode = 'register' | 'admin' | 'tax'
 type TaxMode = 'takeout' | 'dine-in'
@@ -72,6 +84,109 @@ interface InventoryAdjustmentRecord {
   amount: number
 }
 
+interface SetupIssue {
+  id: string
+  title: string
+  detail: string
+  actionLabel: string
+  actionBody: string
+}
+
+interface FreeeStatus {
+  configured: boolean
+  connected: boolean
+  companyId: number | null
+  hasRefreshToken: boolean
+  message: string
+}
+
+interface FreeeCompany {
+  id: number
+  display_name?: string
+  company_number?: string
+  role?: string
+}
+
+interface FreeeCompaniesResult {
+  selectedCompanyId: number | null
+  companies: FreeeCompany[]
+  error?: string
+  status?: number
+}
+
+interface FreeeAccountItem {
+  id: number
+  name: string
+  default_tax_code?: number | null
+}
+
+interface FreeeAccountItemsResult {
+  accountItems: FreeeAccountItem[]
+  error?: string
+  status?: number
+}
+
+interface FreeeTax {
+  code: number
+  name: string
+  name_ja?: string
+  display_category?: string
+  available?: boolean
+}
+
+interface FreeeTaxesResult {
+  taxes: FreeeTax[]
+  source?: string
+  hint?: string
+  lastStatus?: number
+  error?: string
+  status?: number
+}
+
+interface FreeeSendSummary {
+  success: number
+  failed: number
+  total: number
+  lastRunAt: string
+}
+
+interface TaxClassifyApiResponse {
+  ok: boolean
+  classifications?: ClassifiedExpense[]
+  message?: string
+}
+
+function formatFreeeTaxLabel(tax: FreeeTax): string {
+  const ja = String(tax.name_ja ?? '').trim()
+  if (ja) return ja
+
+  const raw = String(tax.name ?? '').trim()
+  if (!raw) return ''
+
+  // Example: purchase_with_tax_10 / sale_without_tax_8
+  const m = raw.match(/^(purchase|sale)_(with|without)_tax_(\d+)$/)
+  if (m) {
+    const kind = m[1] === 'purchase' ? '仕入' : '売上'
+    const inclusive = m[2] === 'with' ? '税込' : '税抜'
+    const rate = m[3]
+    return `課税${kind} ${rate}%（${inclusive}）`
+  }
+
+  const simpleMap: Record<string, string> = {
+    no_tax: '対象外',
+    non_taxable: '不課税',
+    tax_exempt: '免税',
+    exempt: '免税',
+    tax_free: '免税',
+    free: '免税',
+    excluded: '対象外',
+    out_of_scope: '対象外',
+  }
+  if (simpleMap[raw]) return simpleMap[raw]
+
+  return raw
+}
+
 interface CartItem extends MenuItem {
   quantity: number
 }
@@ -80,6 +195,48 @@ const TAX_RATE_BY_MODE: Record<TaxMode, number> = {
   takeout: 8,
   'dine-in': 10,
 }
+
+const LEDGER_SETUP_SQL = `create extension if not exists pgcrypto;
+
+create table if not exists public.expenses (
+  id uuid primary key default gen_random_uuid(),
+  shop_id uuid not null references public.shops(id) on delete cascade,
+  expense_date date not null,
+  amount integer not null check (amount >= 0),
+  description text not null,
+  receipt_url text,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists idx_expenses_shop_date
+  on public.expenses(shop_id, expense_date desc);
+
+create table if not exists public.inventory_adjustments (
+  id uuid primary key default gen_random_uuid(),
+  shop_id uuid not null references public.shops(id) on delete cascade,
+  fiscal_year integer not null check (fiscal_year between 2000 and 9999),
+  amount integer not null check (amount >= 0),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (shop_id, fiscal_year)
+);
+
+create index if not exists idx_inventory_adjustments_shop_year
+  on public.inventory_adjustments(shop_id, fiscal_year);`
+
+const EXPENSE_BUCKET_SETUP_SQL = `insert into storage.buckets (id, name, public)
+values ('expense-receipts', 'expense-receipts', true)
+on conflict (id) do nothing;
+
+drop policy if exists "Expense receipts public read" on storage.objects;
+create policy "Expense receipts public read"
+on storage.objects for select
+using (bucket_id = 'expense-receipts');
+
+drop policy if exists "Expense receipts public upload" on storage.objects;
+create policy "Expense receipts public upload"
+on storage.objects for insert
+with check (bucket_id = 'expense-receipts');`
 
 const yenFormatter = new Intl.NumberFormat('ja-JP')
 
@@ -114,6 +271,15 @@ function getThisYearStart(): string {
   return toDateInputValue(new Date(now.getFullYear(), 0, 1))
 }
 
+function getPreviousFiscalYearRange(): { start: string; end: string } {
+  const now = new Date()
+  const year = now.getFullYear() - 1
+  return {
+    start: `${year}-01-01`,
+    end: `${year}-12-31`,
+  }
+}
+
 function formatDateTime(dateString: string): string {
   return new Date(dateString).toLocaleString('ja-JP', {
     month: '2-digit',
@@ -135,8 +301,48 @@ function escapeCsv(value: string): string {
   return `"${value.replaceAll('"', '""')}"`
 }
 
+function filingItemStatusLabel(status: FilingItemStatus): string {
+  if (status === 'READY') return '完了'
+  if (status === 'REVIEW') return '確認'
+  return '要対応'
+}
+
+function filingItemStatusClass(status: FilingItemStatus): string {
+  if (status === 'READY') return 'bg-emerald-100 text-emerald-700'
+  if (status === 'REVIEW') return 'bg-amber-100 text-amber-700'
+  return 'bg-red-100 text-red-700'
+}
+
+function filingReadinessStatusLabel(status: FilingReadinessStatus): string {
+  if (status === 'READY') return '準備完了'
+  if (status === 'REVIEW_REQUIRED') return '要確認'
+  return '要対応'
+}
+
+function filingReadinessStatusClass(status: FilingReadinessStatus): string {
+  if (status === 'READY') return 'text-emerald-700'
+  if (status === 'REVIEW_REQUIRED') return 'text-amber-700'
+  return 'text-red-700'
+}
+
+function workflowStepClass(status: 'done' | 'review' | 'blocked' | 'ready' | 'pending'): string {
+  if (status === 'done' || status === 'ready') return 'border-emerald-200 bg-emerald-50 text-emerald-800'
+  if (status === 'review') return 'border-amber-200 bg-amber-50 text-amber-800'
+  if (status === 'blocked') return 'border-red-200 bg-red-50 text-red-800'
+  return 'border-slate-200 bg-slate-50 text-slate-600'
+}
+
 function downloadTextFile(filename: string, content: string, mimeType: string): void {
   const blob = new Blob([content], { type: mimeType })
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = filename
+  anchor.click()
+  URL.revokeObjectURL(url)
+}
+
+function downloadBlobFile(filename: string, blob: Blob): void {
   const url = URL.createObjectURL(blob)
   const anchor = document.createElement('a')
   anchor.href = url
@@ -251,6 +457,7 @@ export default function POSSystem() {
 
   const [mode, setMode] = useState<AppMode>('register')
   const [taxMode, setTaxMode] = useState<TaxMode>('dine-in')
+  const [showTaxDeepDive, setShowTaxDeepDive] = useState(false)
 
   const [menuItems, setMenuItems] = useState<MenuItem[]>([])
   const [todaySales, setTodaySales] = useState<SaleRecord[]>([])
@@ -290,10 +497,34 @@ export default function POSSystem() {
   const [inventoryYear, setInventoryYear] = useState<string>(() => String(new Date().getFullYear()))
   const [inventoryAmount, setInventoryAmount] = useState('')
   const [isSavingInventory, setIsSavingInventory] = useState(false)
+  const [setupIssues, setSetupIssues] = useState<SetupIssue[]>([])
+  const [isSetupChecking, setIsSetupChecking] = useState(false)
+  const [isLedgerTemporarilyDisabled, setIsLedgerTemporarilyDisabled] = useState(false)
+  const [freeeStatus, setFreeeStatus] = useState<FreeeStatus | null>(null)
+  const [isLoadingFreeeStatus, setIsLoadingFreeeStatus] = useState(false)
+  const [freeeCompanies, setFreeeCompanies] = useState<FreeeCompany[]>([])
+  const [freeeSelectedCompanyId, setFreeeSelectedCompanyId] = useState<number | null>(null)
+  const [isLoadingFreeeCompanies, setIsLoadingFreeeCompanies] = useState(false)
+  const [freeeAccountItems, setFreeeAccountItems] = useState<FreeeAccountItem[]>([])
+  const [freeeSelectedAccountItemId, setFreeeSelectedAccountItemId] = useState<number | null>(null)
+  const [isLoadingFreeeAccountItems, setIsLoadingFreeeAccountItems] = useState(false)
+  const [freeeTaxes, setFreeeTaxes] = useState<FreeeTax[]>([])
+  const [freeeSelectedTaxCode, setFreeeSelectedTaxCode] = useState<number | null>(null)
+  const [isLoadingFreeeTaxes, setIsLoadingFreeeTaxes] = useState(false)
+  const [isSendingFreeeDeals, setIsSendingFreeeDeals] = useState(false)
+  const [freeeLastSendSummary, setFreeeLastSendSummary] = useState<FreeeSendSummary | null>(null)
+  const [showAllFreeeTaxes, setShowAllFreeeTaxes] = useState(false)
+  const [isAutopilotRunning, setIsAutopilotRunning] = useState(false)
+  const [hasAutoInitializedTaxMode, setHasAutoInitializedTaxMode] = useState(false)
+  const [aiClassifiedExpenses, setAiClassifiedExpenses] = useState<ClassifiedExpense[] | null>(null)
+  const [isAiClassifying, setIsAiClassifying] = useState(false)
+  const [showAdvancedExports, setShowAdvancedExports] = useState(false)
 
   const currentTaxRate = TAX_RATE_BY_MODE[taxMode]
   const uuidShopId = useMemo(() => (shopId ? toDeterministicUuid(shopId) : null), [shopId])
   const activeShopId = useMemo(() => uuidShopId ?? shopId, [shopId, uuidShopId])
+  const isLedgerFeatureEnabled =
+    (process.env.NEXT_PUBLIC_ENABLE_LEDGER ?? '1') !== '0' && !isLedgerTemporarilyDisabled
 
   const filteredMenuItems = useMemo(() => {
     return menuItems.filter((item) => {
@@ -328,6 +559,383 @@ export default function POSSystem() {
   const periodProfit = useMemo(
     () => periodSummary.grossSales - periodExpenseTotal - inventoryAdjustmentAmount,
     [periodSummary.grossSales, periodExpenseTotal, inventoryAdjustmentAmount]
+  )
+  const classifiedExpenses = useMemo<ClassifiedExpense[]>(() => {
+    const base = classifyExpenses(expenses)
+    if (!aiClassifiedExpenses || aiClassifiedExpenses.length === 0) return base
+
+    const aiMap = new Map(aiClassifiedExpenses.map((item) => [item.expenseId, item]))
+    return base.map((item) => aiMap.get(item.expenseId) ?? item)
+  }, [aiClassifiedExpenses, expenses])
+  const expenseClassificationMap = useMemo(() => {
+    return new Map(classifiedExpenses.map((item) => [item.expenseId, item]))
+  }, [classifiedExpenses])
+  const expenseClassificationSummary = useMemo(
+    () => summarizeClassifiedExpenses(classifiedExpenses, 0.1),
+    [classifiedExpenses]
+  )
+  const filingReadiness = useMemo<FilingReadiness>(
+    () =>
+      buildFilingReadiness({
+        startDate,
+        endDate,
+        salesCount: periodSummary.transactionCount,
+        salesGross: periodSummary.grossSales,
+        expenseCount: expenses.length,
+        expenseTotal: periodExpenseTotal,
+        inventoryAmount: inventoryAdjustmentAmount,
+        classificationSummary: expenseClassificationSummary,
+        classifiedExpenses,
+      }),
+    [
+      classifiedExpenses,
+      endDate,
+      expenseClassificationSummary,
+      expenses.length,
+      inventoryAdjustmentAmount,
+      periodExpenseTotal,
+      periodSummary.grossSales,
+      periodSummary.transactionCount,
+      startDate,
+    ]
+  )
+  const exportBlockerMessage = useMemo(() => {
+    const blockers = filingReadiness.items.filter((item) => item.status === 'BLOCKER')
+    if (blockers.length === 0) return ''
+    return blockers.map((item) => `${item.title}: ${item.reason}`).join(' / ')
+  }, [filingReadiness.items])
+  const isExportBlocked = filingReadiness.exportBlocked
+  const workflowSteps = useMemo(
+    () => [
+      {
+        id: 'collect',
+        label: '1. 集計',
+        status: periodSummary.transactionCount > 0 ? 'done' : 'pending',
+      },
+      {
+        id: 'classify',
+        label: '2. 判定',
+        status:
+          expenseClassificationSummary.total > 0 &&
+          expenseClassificationSummary.ngCount === 0 &&
+          expenseClassificationSummary.reviewCount <= expenseClassificationSummary.maxReviewAllowed
+            ? 'done'
+            : expenseClassificationSummary.total > 0
+              ? 'review'
+              : 'pending',
+      },
+      {
+        id: 'export',
+        label: '3. 出力',
+        status: isExportBlocked ? 'blocked' : 'ready',
+      },
+    ],
+    [expenseClassificationSummary, isExportBlocked, periodSummary.transactionCount]
+  )
+
+  const visibleFreeeTaxes = useMemo(() => {
+    if (showAllFreeeTaxes) return freeeTaxes
+    const recommendedKeywords = ['課税仕入', '課税売上', '非課税', '不課税', '免税', '対象外']
+    const recommended = freeeTaxes.filter((tax) => {
+      const label = formatFreeeTaxLabel(tax)
+      return recommendedKeywords.some((k) => label.includes(k))
+    })
+    return recommended.length > 0 ? recommended : freeeTaxes
+  }, [freeeTaxes, showAllFreeeTaxes])
+
+  const queryPeriodExpenses = useCallback(async (
+    range?: { startDate: string; endDate: string }
+  ): Promise<
+    | { ok: true; expenses: ExpenseRecord[] }
+    | { ok: false; kind: 'no_shop' | 'invalid_period' | 'missing_table' | 'error'; message?: string }
+  > => {
+    if (!activeShopId) return { ok: false, kind: 'no_shop' }
+    const targetStartDate = range?.startDate ?? startDate
+    const targetEndDate = range?.endDate ?? endDate
+
+    if (!targetStartDate || !targetEndDate || targetStartDate > targetEndDate) {
+      return { ok: false, kind: 'invalid_period' }
+    }
+
+    const { data, error } = await supabase
+      .from('expenses')
+      .select('id, shop_id, expense_date, amount, description, receipt_url, created_at')
+      .eq('shop_id', activeShopId)
+      .gte('expense_date', targetStartDate)
+      .lte('expense_date', targetEndDate)
+      .order('expense_date', { ascending: false })
+      .order('created_at', { ascending: false })
+
+    if (error) {
+      if (isMissingTableError(error)) {
+        return { ok: false, kind: 'missing_table' }
+      }
+      return { ok: false, kind: 'error', message: error.message }
+    }
+
+    return { ok: true, expenses: sanitizeExpenses((data ?? []) as unknown[]) }
+  }, [activeShopId, endDate, startDate])
+
+  const fetchFreeeStatus = useCallback(async () => {
+    setIsLoadingFreeeStatus(true)
+
+    try {
+      const response = await fetch('/api/freee/status', { cache: 'no-store' })
+      const data = (await response.json()) as FreeeStatus
+      setFreeeStatus(data)
+    } catch (error) {
+      setFreeeStatus({
+        configured: false,
+        connected: false,
+        companyId: null,
+        hasRefreshToken: false,
+        message: `freee状態の取得に失敗しました: ${error instanceof Error ? error.message : 'unknown'}`,
+      })
+    } finally {
+      setIsLoadingFreeeStatus(false)
+    }
+  }, [])
+
+  const fetchFreeeCompanies = useCallback(async () => {
+    setIsLoadingFreeeCompanies(true)
+    try {
+      const response = await fetch('/api/freee/companies', { cache: 'no-store' })
+      const data = (await response.json()) as FreeeCompaniesResult
+      setFreeeCompanies(Array.isArray(data.companies) ? data.companies : [])
+      setFreeeSelectedCompanyId(data.selectedCompanyId ?? null)
+    } catch (error) {
+      setNotice({
+        type: 'error',
+        message: `freee事業所一覧の取得に失敗しました: ${error instanceof Error ? error.message : 'unknown'}`,
+      })
+    } finally {
+      setIsLoadingFreeeCompanies(false)
+    }
+  }, [])
+
+  const setFreeeCompany = useCallback(async (companyId: number) => {
+    try {
+      const response = await fetch('/api/freee/companies', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ companyId }),
+      })
+      if (!response.ok) {
+        setNotice({ type: 'error', message: 'freee事業所の切り替えに失敗しました。' })
+        return
+      }
+      setFreeeSelectedCompanyId(companyId)
+      setNotice({ type: 'success', message: 'freee事業所を切り替えました。' })
+      await fetchFreeeStatus()
+    } catch (error) {
+      setNotice({
+        type: 'error',
+        message: `freee事業所の切り替えに失敗しました: ${error instanceof Error ? error.message : 'unknown'}`,
+      })
+    }
+  }, [fetchFreeeStatus])
+
+  const fetchFreeeAccountItems = useCallback(async () => {
+    setIsLoadingFreeeAccountItems(true)
+    try {
+      const response = await fetch('/api/freee/account-items', { cache: 'no-store' })
+      const data = (await response.json()) as FreeeAccountItemsResult
+      const items = Array.isArray(data.accountItems) ? data.accountItems : []
+      setFreeeAccountItems(items)
+
+      // それっぽいデフォルトを当てる（雑費/消耗品費/仕入など）
+      const preferred = ['雑費', '消耗品', '仕入', '外注費', '通信費', '広告宣伝費']
+      const found = items.find((it) => preferred.some((p) => it.name.includes(p)))
+      const initialAccountItemId = found?.id ?? (items[0]?.id ?? null)
+      setFreeeSelectedAccountItemId((prev) => prev ?? initialAccountItemId)
+
+      // account_item の default_tax_code があるならそれを優先する
+      const initialItem = items.find((it) => it.id === (freeeSelectedAccountItemId ?? initialAccountItemId))
+      if (initialItem?.default_tax_code) {
+        setFreeeSelectedTaxCode((prev) => prev ?? initialItem.default_tax_code ?? null)
+      }
+    } catch (error) {
+      setNotice({
+        type: 'error',
+        message: `freee勘定科目の取得に失敗しました: ${error instanceof Error ? error.message : 'unknown'}`,
+      })
+    } finally {
+      setIsLoadingFreeeAccountItems(false)
+    }
+  }, [])
+
+  const fetchFreeeTaxes = useCallback(async () => {
+    setIsLoadingFreeeTaxes(true)
+    try {
+      // まずは使用可能な税区分だけ取得（display_category指定は後で絞り込む）
+      const response = await fetch('/api/freee/taxes?available=true', { cache: 'no-store' })
+      const data = (await response.json()) as FreeeTaxesResult
+      const taxes = Array.isArray(data.taxes) ? data.taxes : []
+      setFreeeTaxes(taxes)
+
+      if (!response.ok) {
+        setNotice({
+          type: 'error',
+          message: `freee税区分の取得に失敗しました（HTTP ${response.status}）。`,
+        })
+        return
+      }
+
+      if (taxes.length === 0) {
+        setNotice({
+          type: 'error',
+          message:
+            data.hint ??
+            'freee税区分が0件です。freeeの事業所設定または権限（scope/契約）を確認してください。',
+        })
+        return
+      }
+
+      // それっぽいデフォルト（課対仕入10% / 課税仕入10% 系）を探す
+      const preferredRaw = ['purchase_with_tax_10', 'purchase_without_tax_10', 'purchase_with_tax_8', 'purchase_without_tax_8']
+      const found =
+        taxes.find((t) => preferredRaw.includes(String(t.name ?? '').trim())) ??
+        taxes.find((t) => {
+          const label = formatFreeeTaxLabel(t)
+          return label.includes('課税仕入') && (label.includes('10%') || label.includes('10'))
+        }) ??
+        taxes.find((t) => formatFreeeTaxLabel(t).includes('課税仕入')) ??
+        taxes[0]
+
+      setFreeeSelectedTaxCode((prev) => prev ?? found?.code ?? (taxes[0]?.code ?? null))
+    } catch (error) {
+      setNotice({
+        type: 'error',
+        message: `freee税区分の取得に失敗しました: ${error instanceof Error ? error.message : 'unknown'}`,
+      })
+    } finally {
+      setIsLoadingFreeeTaxes(false)
+    }
+  }, [])
+
+  const sendExpensesToFreeeDeals = useCallback(
+    async (limit: number) => {
+      if (isExportBlocked) {
+        setNotice({
+          type: 'error',
+          message: `要確認 ${expenseClassificationSummary.reviewCount} 件 / NG ${expenseClassificationSummary.ngCount} 件を解消してから送信してください。`,
+        })
+        return
+      }
+
+      if (!freeeStatus?.connected || !freeeStatus.companyId) {
+        setNotice({ type: 'error', message: 'freeeが未接続です。先に接続してください。' })
+        return
+      }
+      if (!freeeSelectedAccountItemId) {
+        setNotice({ type: 'error', message: 'freeeの勘定科目を選択してください。' })
+        return
+      }
+      if (!freeeSelectedTaxCode) {
+        setNotice({ type: 'error', message: 'freeeの税区分（tax code）を選択してください。' })
+        return
+      }
+
+      const result = await queryPeriodExpenses()
+      if (result.ok) {
+        setExpenses(result.expenses)
+      }
+
+      if (!result.ok && result.kind === 'missing_table') {
+        setNotice({
+          type: 'error',
+          message: '経費帳テーブルが未作成です（Supabaseに expenses を作成してください）。',
+        })
+        return
+      }
+
+      if (!result.ok && result.kind === 'error') {
+        setNotice({ type: 'error', message: `経費取得に失敗しました: ${result.message}` })
+        return
+      }
+
+      const sourceExpenses = result.ok ? result.expenses : expenses
+      const sourceClassifications = classifyExpenses(sourceExpenses)
+      const exportableExpenses = sourceExpenses.filter((expense) => {
+        const c = sourceClassifications.find((item) => item.expenseId === expense.id)
+        return c?.rank === 'OK'
+      })
+      if (exportableExpenses.length === 0) {
+        setNotice({
+          type: 'error',
+          message: '送信できる経費がありません（自動判定でOKの経費が0件です）。',
+        })
+        return
+      }
+
+      const target = exportableExpenses.slice(0, Math.max(1, limit))
+      const ok = window.confirm(
+        `freeeに支出取引（未決済）として ${target.length} 件登録します。\n\nfreee側で最終確認してから確定してください。\n\n続行しますか？`
+      )
+      if (!ok) return
+
+      setIsSendingFreeeDeals(true)
+      try {
+        const response = await fetch('/api/freee/deals', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            companyId: freeeStatus.companyId,
+            accountItemId: freeeSelectedAccountItemId,
+            taxCode: freeeSelectedTaxCode,
+            expenses: target.map((exp) => ({
+              id: exp.id,
+              expense_date: exp.expense_date,
+              amount: exp.amount,
+              description: exp.description,
+              receipt_url: exp.receipt_url,
+            })),
+          }),
+        })
+
+        const data = (await response.json()) as unknown
+
+        const parsed = data as { ok?: boolean; results?: Array<{ ok: boolean; status: number }> }
+        if (!response.ok) {
+          setNotice({ type: 'error', message: `freee送信に失敗しました（HTTP ${response.status}）` })
+          return
+        }
+
+        const results = Array.isArray(parsed.results) ? parsed.results : []
+        const success = results.filter((r) => r.ok).length
+        const failed = results.length - success
+        setFreeeLastSendSummary({
+          success,
+          failed,
+          total: results.length,
+          lastRunAt: new Date().toISOString(),
+        })
+        setNotice({
+          type: failed === 0 ? 'success' : 'error',
+          message:
+            failed === 0
+              ? `freeeに ${success} 件登録しました（未決済の支出取引）。`
+              : `freee送信: 成功 ${success} 件 / 失敗 ${failed} 件`,
+        })
+      } catch (error) {
+        setNotice({
+          type: 'error',
+          message: `freee送信に失敗しました: ${error instanceof Error ? error.message : 'unknown'}`,
+        })
+      } finally {
+        setIsSendingFreeeDeals(false)
+      }
+    },
+    [
+      expenseClassificationSummary.ngCount,
+      expenseClassificationSummary.reviewCount,
+      expenses,
+      freeeSelectedAccountItemId,
+      freeeSelectedTaxCode,
+      freeeStatus?.companyId,
+      freeeStatus?.connected,
+      isExportBlocked,
+    ]
   )
 
   const fetchMenuItems = useCallback(async () => {
@@ -434,49 +1042,121 @@ export default function POSSystem() {
     }
   }, [shopId, uuidShopId])
 
-  const fetchPeriodExpenses = useCallback(async () => {
+  const runSetupChecks = useCallback(async () => {
     if (!activeShopId) return
 
-    if (!startDate || !endDate || startDate > endDate) {
-      return
+    setIsSetupChecking(true)
+    const issues: SetupIssue[] = []
+
+    const tableChecks: Array<{ table: string; select: string }> = [
+      { table: 'shops', select: 'id' },
+      { table: 'menu_items', select: 'id' },
+      { table: 'sales', select: 'id' },
+      { table: 'expenses', select: 'id' },
+      { table: 'inventory_adjustments', select: 'id' },
+    ]
+
+    for (const check of tableChecks) {
+      const { error } = await supabase.from(check.table).select(check.select).limit(1)
+      if (!error) continue
+
+      if (isMissingTableError(error)) {
+        issues.push({
+          id: `missing-table-${check.table}`,
+          title: `テーブル不足: ${check.table}`,
+          detail: `Supabaseに ${check.table} テーブルがありません。下のSQLを実行してください。`,
+          actionLabel: 'SQLを実行',
+          actionBody: LEDGER_SETUP_SQL,
+        })
+        continue
+      }
+
+      if (error.code === '42501') {
+        issues.push({
+          id: `policy-${check.table}`,
+          title: `権限不足: ${check.table}`,
+          detail:
+            `テーブル ${check.table} へのアクセス権限が不足しています。RLSポリシーまたはロール権限を確認してください。`,
+          actionLabel: 'RLSを確認',
+          actionBody: `-- 例: policy確認\nselect * from pg_policies where tablename = '${check.table}';`,
+        })
+      }
     }
 
-    setIsExpenseLoading(true)
-
-    const { data, error } = await supabase
-      .from('expenses')
-      .select('id, shop_id, expense_date, amount, description, receipt_url, created_at')
-      .eq('shop_id', activeShopId)
-      .gte('expense_date', startDate)
-      .lte('expense_date', endDate)
-      .order('expense_date', { ascending: false })
-      .order('created_at', { ascending: false })
-
-    setIsExpenseLoading(false)
-
-    if (error) {
-      if (isMissingTableError(error)) {
-        setExpenses([])
-        setNotice({
-          type: 'error',
-          message:
-            '経費帳テーブルが未作成です。Supabaseに expenses / inventory_adjustments を作成してください。',
+    const bucketCheck = await supabase.storage.from('expense-receipts').list(activeShopId, { limit: 1 })
+    if (bucketCheck.error) {
+      const message = bucketCheck.error.message.toLowerCase()
+      if (message.includes('bucket') && message.includes('not')) {
+        issues.push({
+          id: 'missing-bucket-expense-receipts',
+          title: 'レシート保存バケット不足',
+          detail: 'storage bucket `expense-receipts` が未作成です。SQLで作成してください。',
+          actionLabel: 'Bucket作成SQL',
+          actionBody: EXPENSE_BUCKET_SETUP_SQL,
         })
+      } else if (bucketCheck.error.statusCode === '403') {
+        issues.push({
+          id: 'bucket-policy-expense-receipts',
+          title: 'レシート保存権限不足',
+          detail: 'expense-receipts へのアクセス権限が不足しています。storage policyを追加してください。',
+          actionLabel: 'Policy作成SQL',
+          actionBody: EXPENSE_BUCKET_SETUP_SQL,
+        })
+      }
+    }
+
+    const clerkPublishableKey = process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY ?? ''
+    if (clerkPublishableKey.startsWith('pk_test_')) {
+      issues.push({
+        id: 'clerk-dev-key',
+        title: 'Clerkが開発キーのままです',
+        detail: '本番利用制限があるため、Vercelの環境変数を本番キーへ差し替えてください。',
+        actionLabel: '必要なキー',
+        actionBody:
+          'NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=<pk_live_...>\nCLERK_SECRET_KEY=<sk_live_...>',
+      })
+    }
+
+    // freee 連携は店主ワンタップ体験の範囲外なので、導入チェック対象から除外する。
+
+    setSetupIssues(issues)
+    setIsSetupChecking(false)
+  }, [activeShopId])
+
+  const fetchPeriodExpenses = useCallback(async () => {
+    setIsExpenseLoading(true)
+    try {
+      const result = await queryPeriodExpenses()
+
+      if (!result.ok) {
+        if (result.kind === 'missing_table') {
+          setExpenses([])
+          setAiClassifiedExpenses(null)
+          setNotice({
+            type: 'error',
+            message:
+              '経費帳テーブルが未作成です。Supabaseに expenses / inventory_adjustments を作成してください。',
+          })
+          return
+        }
+        if (result.kind === 'error') {
+          setNotice({ type: 'error', message: `経費取得に失敗しました: ${result.message}` })
+        }
         return
       }
 
-      setNotice({ type: 'error', message: `経費取得に失敗しました: ${error.message}` })
-      return
+      setAiClassifiedExpenses(null)
+      setExpenses(result.expenses)
+    } finally {
+      setIsExpenseLoading(false)
     }
+  }, [queryPeriodExpenses])
 
-    setExpenses(sanitizeExpenses((data ?? []) as unknown[]))
-  }, [activeShopId, endDate, startDate])
+  const fetchInventoryAdjustment = useCallback(async (targetYear?: string): Promise<number | null> => {
+    if (!activeShopId) return null
 
-  const fetchInventoryAdjustment = useCallback(async () => {
-    if (!activeShopId) return
-
-    const parsedYear = Number(inventoryYear)
-    if (!Number.isInteger(parsedYear)) return
+    const parsedYear = Number(targetYear ?? inventoryYear)
+    if (!Number.isInteger(parsedYear)) return null
 
     const { data, error } = await supabase
       .from('inventory_adjustments')
@@ -488,27 +1168,32 @@ export default function POSSystem() {
     if (error) {
       if (isMissingTableError(error)) {
         setInventoryAmount('')
-        return
+        return 0
       }
       setNotice({ type: 'error', message: `在庫調整額の取得に失敗しました: ${error.message}` })
-      return
+      return null
     }
 
     const record = data as InventoryAdjustmentRecord | null
     setInventoryAmount(record ? String(record.amount) : '')
+    return record?.amount ?? 0
   }, [activeShopId, inventoryYear])
 
-  const fetchPeriodSales = useCallback(async () => {
-    if (!shopId) return
+  const fetchPeriodSales = useCallback(async (
+    range?: { startDate: string; endDate: string }
+  ): Promise<{ sales: SaleRecord[]; expenses: ExpenseRecord[] } | null> => {
+    if (!shopId) return null
+    const targetStartDate = range?.startDate ?? startDate
+    const targetEndDate = range?.endDate ?? endDate
 
-    if (!startDate || !endDate) {
+    if (!targetStartDate || !targetEndDate) {
       setNotice({ type: 'error', message: '開始日と終了日を設定してください。' })
-      return
+      return null
     }
 
-    if (startDate > endDate) {
+    if (targetStartDate > targetEndDate) {
       setNotice({ type: 'error', message: '終了日は開始日以降にしてください。' })
-      return
+      return null
     }
 
     setIsPeriodLoading(true)
@@ -518,8 +1203,8 @@ export default function POSSystem() {
       .from('sales')
       .select('id, items, total_amount, created_at, shop_id, tax_details')
       .eq('shop_id', shopId)
-      .gte('created_at', `${startDate}T00:00:00`)
-      .lte('created_at', `${endDate}T23:59:59`)
+      .gte('created_at', `${targetStartDate}T00:00:00`)
+      .lte('created_at', `${targetEndDate}T23:59:59`)
       .order('created_at', { ascending: false })
 
     if (isInvalidUuidError(error) && uuidShopId) {
@@ -527,8 +1212,8 @@ export default function POSSystem() {
         .from('sales')
         .select('id, items, total_amount, created_at, shop_id, tax_details')
         .eq('shop_id', uuidShopId)
-        .gte('created_at', `${startDate}T00:00:00`)
-        .lte('created_at', `${endDate}T23:59:59`)
+        .gte('created_at', `${targetStartDate}T00:00:00`)
+        .lte('created_at', `${targetEndDate}T23:59:59`)
         .order('created_at', { ascending: false })
       data = retry.data
       error = retry.error
@@ -537,34 +1222,53 @@ export default function POSSystem() {
     setIsPeriodLoading(false)
 
     if (!error) {
-      setPeriodSales(sanitizeSales((data ?? []) as unknown[]))
-      await fetchPeriodExpenses()
-      return
+      const normalizedSales = sanitizeSales((data ?? []) as unknown[])
+      setPeriodSales(normalizedSales)
+      const expensesResult = await queryPeriodExpenses({
+        startDate: targetStartDate,
+        endDate: targetEndDate,
+      })
+      if (expensesResult.ok) {
+        setAiClassifiedExpenses(null)
+        setExpenses(expensesResult.expenses)
+        return { sales: normalizedSales, expenses: expensesResult.expenses }
+      }
+      return { sales: normalizedSales, expenses: [] }
     }
 
     if (isMissingColumnError(error, 'shop_id') || isMissingColumnError(error, 'tax_details')) {
       const { data: legacyData, error: legacyError } = await supabase
         .from('sales')
         .select('id, items, total_amount, created_at')
-        .gte('created_at', `${startDate}T00:00:00`)
-        .lte('created_at', `${endDate}T23:59:59`)
+        .gte('created_at', `${targetStartDate}T00:00:00`)
+        .lte('created_at', `${targetEndDate}T23:59:59`)
         .order('created_at', { ascending: false })
 
       if (legacyError) {
         setNotice({ type: 'error', message: `期間売上取得に失敗しました: ${legacyError.message}` })
-        return
+        return null
       }
 
-      setPeriodSales(sanitizeSales((legacyData ?? []) as unknown[]))
-      await fetchPeriodExpenses()
-      return
+      const normalizedSales = sanitizeSales((legacyData ?? []) as unknown[])
+      setPeriodSales(normalizedSales)
+      const expensesResult = await queryPeriodExpenses({
+        startDate: targetStartDate,
+        endDate: targetEndDate,
+      })
+      if (expensesResult.ok) {
+        setAiClassifiedExpenses(null)
+        setExpenses(expensesResult.expenses)
+        return { sales: normalizedSales, expenses: expensesResult.expenses }
+      }
+      return { sales: normalizedSales, expenses: [] }
     }
 
     if (error) {
       setNotice({ type: 'error', message: `期間売上取得に失敗しました: ${error.message}` })
-      return
+      return null
     }
-  }, [endDate, shopId, startDate, uuidShopId, fetchPeriodExpenses])
+    return null
+  }, [endDate, shopId, startDate, uuidShopId, queryPeriodExpenses])
 
   useEffect(() => {
     if (!shopId) return
@@ -588,9 +1292,41 @@ export default function POSSystem() {
   }, [shopId, isInitialLoading, shopName, skipShopNamePrompt])
 
   useEffect(() => {
+    if (!shopId || isInitialLoading) return
+    void runSetupChecks()
+  }, [shopId, isInitialLoading, runSetupChecks])
+
+  useEffect(() => {
+    setHasAutoInitializedTaxMode(false)
+  }, [shopId])
+
+  useEffect(() => {
+    // Keep deep-dive panel scoped to the current view.
+    if (mode !== 'tax') setShowTaxDeepDive(false)
+  }, [mode])
+
+  useEffect(() => {
+    if (mode !== 'tax') return
+    void runSetupChecks()
+  }, [mode, runSetupChecks])
+
+  useEffect(() => {
+    if (mode !== 'tax') return
+    void fetchPeriodExpenses()
+  }, [mode, fetchPeriodExpenses])
+
+  useEffect(() => {
     if (mode !== 'tax') return
     void fetchInventoryAdjustment()
   }, [mode, fetchInventoryAdjustment])
+
+  useEffect(() => {
+    if (mode !== 'tax') return
+    const yearFromPeriod = endDate.slice(0, 4)
+    if (/^\d{4}$/.test(yearFromPeriod) && yearFromPeriod !== inventoryYear) {
+      setInventoryYear(yearFromPeriod)
+    }
+  }, [endDate, inventoryYear, mode])
 
   const addItemToCart = (item: MenuItem) => {
     setNotice(null)
@@ -1078,12 +1814,109 @@ export default function POSSystem() {
     setEndDate(toDateInputValue(new Date()))
   }
 
-  const exportPeriodCsv = () => {
-    if (periodSales.length === 0) {
-      setNotice({ type: 'error', message: 'CSV出力する売上がありません。' })
-      return
-    }
+  const runAiClassificationForExpenses = useCallback(
+    async (targetExpenses: ExpenseRecord[]): Promise<ClassifiedExpense[] | null> => {
+      if (targetExpenses.length === 0) {
+        setAiClassifiedExpenses([])
+        return []
+      }
 
+      setIsAiClassifying(true)
+      try {
+        const response = await fetch('/api/tax/classify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            expenses: targetExpenses.map((expense) => ({
+              id: expense.id,
+              expense_date: expense.expense_date,
+              amount: expense.amount,
+              description: expense.description,
+              receipt_url: expense.receipt_url,
+            })),
+          }),
+        })
+
+        const data = (await response.json()) as TaxClassifyApiResponse
+        if (!response.ok || !data.ok || !Array.isArray(data.classifications)) {
+          setNotice({
+            type: 'error',
+            message: 'AI再判定に失敗しました。ルール判定のみで続行します。',
+          })
+          return null
+        }
+
+        setAiClassifiedExpenses(data.classifications)
+        if (data.message) {
+          setNotice({ type: 'success', message: data.message })
+        }
+        return data.classifications
+      } catch {
+        setNotice({
+          type: 'error',
+          message: 'AI再判定に失敗しました。ルール判定のみで続行します。',
+        })
+        return null
+      } finally {
+        setIsAiClassifying(false)
+      }
+    },
+    []
+  )
+
+  const runAutopilotWorkflow = useCallback(async () => {
+    const range = getPreviousFiscalYearRange()
+    setStartDate(range.start)
+    setEndDate(range.end)
+    setInventoryYear(range.end.slice(0, 4))
+    setIsAutopilotRunning(true)
+    setNotice(null)
+
+    try {
+      const loaded = await fetchPeriodSales(range)
+      const inventoryValue = (await fetchInventoryAdjustment(range.end.slice(0, 4))) ?? 0
+      const initial = classifyExpenses(loaded?.expenses ?? [])
+      const shouldEscalate = initial.some((item) => item.rank === 'REVIEW')
+      const ai = shouldEscalate ? await runAiClassificationForExpenses(loaded?.expenses ?? []) : null
+      const finalClassifications = ai ?? initial
+      const summary = summarizeClassifiedExpenses(finalClassifications, 0.1)
+      const localReadiness = buildFilingReadiness({
+        startDate: range.start,
+        endDate: range.end,
+        salesCount: loaded?.sales.length ?? 0,
+        salesGross: (loaded?.sales ?? []).reduce((sum, sale) => sum + sale.total_amount, 0),
+        expenseCount: (loaded?.expenses ?? []).length,
+        expenseTotal: (loaded?.expenses ?? []).reduce((sum, expense) => sum + expense.amount, 0),
+        inventoryAmount: inventoryValue,
+        classificationSummary: summary,
+        classifiedExpenses: finalClassifications,
+      })
+      const blockerMessage = localReadiness.items
+        .filter((item) => item.status === 'BLOCKER')
+        .map((item) => `${item.title}: ${item.reason}`)
+        .join(' / ')
+      setNotice({
+        type: localReadiness.exportBlocked ? 'error' : 'success',
+        message: localReadiness.exportBlocked
+          ? `自動ワークフロー完了（${range.start}〜${range.end}）。${blockerMessage}`
+          : `自動ワークフローを実行しました（対象期間: ${range.start}〜${range.end}）。申告準備度 ${localReadiness.score}%`,
+      })
+      return { summary, readiness: localReadiness }
+    } finally {
+      setIsAutopilotRunning(false)
+    }
+  }, [fetchInventoryAdjustment, fetchPeriodSales, runAiClassificationForExpenses])
+
+  const exportSalesCsv = () => {
+    const csv = buildSalesCsv()
+    downloadTextFile(
+      `sales-ledger-${startDate}-to-${endDate}.csv`,
+      csv,
+      'text/csv;charset=utf-8;'
+    )
+  }
+
+  const buildSalesCsv = () => {
     const header = [
       '日時',
       '商品明細',
@@ -1108,12 +1941,246 @@ export default function POSSystem() {
       ]
     })
 
-    const csv = ['\uFEFF' + header.join(','), ...rows.map((row) => row.join(','))].join('\n')
+    return ['\uFEFF' + header.join(','), ...rows.map((row) => row.join(','))].join('\n')
+  }
+
+  const exportExpensesCsv = () => {
+    const csv = buildExpensesCsv()
     downloadTextFile(
-      `sales-ledger-${startDate}-to-${endDate}.csv`,
+      `expense-ledger-${startDate}-to-${endDate}.csv`,
       csv,
       'text/csv;charset=utf-8;'
     )
+  }
+
+  const buildExpensesCsv = () => {
+    const header = ['日付', '金額', '内容', 'レシートURL', '判定', '信頼度', '勘定科目候補', '理由', '登録日時']
+    const rows = expenses.map((expense) => {
+      const classification = expenseClassificationMap.get(expense.id)
+      return [
+        escapeCsv(expense.expense_date),
+        String(expense.amount),
+        escapeCsv(expense.description),
+        escapeCsv(expense.receipt_url ?? ''),
+        escapeCsv(classification?.rank ?? 'REVIEW'),
+        String(classification?.confidence ?? 0),
+        escapeCsv(classification?.accountItem ?? '雑費'),
+        escapeCsv(classification?.reason ?? '判定未実行'),
+        escapeCsv(formatDateTime(expense.created_at)),
+      ]
+    })
+
+    return ['\uFEFF' + header.join(','), ...rows.map((row) => row.join(','))].join('\n')
+  }
+
+  const exportProfitSummaryCsv = () => {
+    const csv = buildProfitSummaryCsv()
+    downloadTextFile(
+      `profit-summary-${startDate}-to-${endDate}.csv`,
+      csv,
+      'text/csv;charset=utf-8;'
+    )
+  }
+
+  const buildProfitSummaryCsv = () => {
+    const header = ['開始日', '終了日', '売上（税込）', '経費合計', '在庫調整', '利益', '計算式']
+    const row = [
+      escapeCsv(startDate),
+      escapeCsv(endDate),
+      String(periodSummary.grossSales),
+      String(periodExpenseTotal),
+      String(inventoryAdjustmentAmount),
+      String(periodProfit),
+      escapeCsv('売上 - 経費 - 在庫調整'),
+    ]
+    return ['\uFEFF' + header.join(','), row.join(',')].join('\n')
+  }
+
+  const downloadTaxPackZip = async () => {
+    const zip = new JSZip()
+    const safeShopName = String(shopName ?? 'shop').replaceAll(/[\\/:*?"<>|]/g, '_')
+    const readinessChecklist = filingReadiness.items
+      .map(
+        (item, index) =>
+          `${index + 1}. [${filingItemStatusLabel(item.status)}] ${item.title}\n   理由: ${item.reason}\n   対応: ${item.action}`
+      )
+      .join('\n')
+
+    zip.file(`sales-ledger-${startDate}-to-${endDate}.csv`, buildSalesCsv())
+    zip.file(`expense-ledger-${startDate}-to-${endDate}.csv`, buildExpensesCsv())
+    zip.file(`profit-summary-${startDate}-to-${endDate}.csv`, buildProfitSummaryCsv())
+    zip.file(
+      `filing-readiness-${startDate}-to-${endDate}.json`,
+      JSON.stringify(filingReadiness, null, 2)
+    )
+    zip.file(
+      `tax-accountant-handoff-${startDate}-to-${endDate}.md`,
+      [
+        `# 税理士引き継ぎメモ (${startDate}〜${endDate})`,
+        '',
+        `- 店舗: ${shopName ?? '未設定'} (${activeShopId ?? 'unknown'})`,
+        `- 申告準備度: ${filingReadiness.score}% / ${filingReadinessStatusLabel(filingReadiness.status)}`,
+        '',
+        '## チェックリスト',
+        readinessChecklist,
+      ].join('\n')
+    )
+    zip.file(
+      `summary-${startDate}-to-${endDate}.json`,
+      JSON.stringify(
+        {
+          shop: { id: activeShopId, name: shopName ?? null, email: user?.email ?? null },
+          period: { startDate, endDate },
+          totals: {
+            sales_gross: periodSummary.grossSales,
+            sales_net: periodSummary.netSales,
+            sales_tax: periodSummary.taxTotal,
+            expenses_total: periodExpenseTotal,
+            inventory_adjustment: inventoryAdjustmentAmount,
+            profit: periodProfit,
+          },
+          classification: expenseClassificationSummary,
+          filing_readiness: filingReadiness,
+          generated_at: new Date().toISOString(),
+        },
+        null,
+        2
+      )
+    )
+    zip.file(
+      'README.txt',
+      [
+        '申告パック（自動生成）',
+        '',
+        '含まれるもの:',
+        '- sales-ledger: 売上の帳簿（CSV）',
+        '- expense-ledger: 経費の帳簿 + 自動判定（CSV）',
+        '- profit-summary: 期間の損益サマリー（CSV）',
+        '- filing-readiness: 申告準備度チェック（JSON）',
+        '- tax-accountant-handoff: 税理士向け確認メモ（Markdown）',
+        '- summary: 集計値と出力メタ情報（JSON）',
+        '',
+        '注意:',
+        '- 自動判定は補助です。必要に応じて証憑（レシート/請求書/カード明細）と照合してください。',
+        '- 人件費（給与）などは、経費として記帳されている前提で集計されます。',
+      ].join('\n')
+    )
+
+    const blob = await zip.generateAsync({ type: 'blob' })
+    downloadBlobFile(`tax-pack-${safeShopName}-${startDate}-to-${endDate}.zip`, blob)
+  }
+
+  const exportMonthlyCsvPack = (options?: { force?: boolean }) => {
+    if (isExportBlocked && !options?.force) {
+      setNotice({
+        type: 'error',
+        message: `出力を停止しました。${exportBlockerMessage}`,
+      })
+      return
+    }
+    exportSalesCsv()
+    exportExpensesCsv()
+    exportProfitSummaryCsv()
+    setNotice({ type: 'success', message: '月次提出用CSVを3点出力しました。' })
+  }
+
+  const exportTaxPackManually = async () => {
+    if (isExportBlocked) {
+      setNotice({
+        type: 'error',
+        message: `出力前に対応が必要です。${exportBlockerMessage}`,
+      })
+      return
+    }
+    await downloadTaxPackZip()
+    setNotice({ type: 'success', message: '申告パック（zip）を出力しました。' })
+  }
+
+  const runAutopilotAndExport = async () => {
+    const workflowResult = await runAutopilotWorkflow()
+    if (!workflowResult || workflowResult.readiness.exportBlocked) return
+    await downloadTaxPackZip()
+    setNotice({ type: 'success', message: '申告パック（zip）を出力しました。' })
+  }
+
+  useEffect(() => {
+    if (mode !== 'tax' || hasAutoInitializedTaxMode) return
+    setHasAutoInitializedTaxMode(true)
+    void runAutopilotWorkflow()
+  }, [hasAutoInitializedTaxMode, mode, runAutopilotWorkflow])
+
+  const exportFreeeExpenseJson = async () => {
+    if (isExportBlocked) {
+      setNotice({
+        type: 'error',
+        message: `出力前に対応が必要です。${exportBlockerMessage}`,
+      })
+      return
+    }
+
+    // 書き出し直前に取り直す（売上が0件の月でも経費だけはあるケースが多い）
+    const result = await queryPeriodExpenses()
+    if (result.ok) {
+      setExpenses(result.expenses)
+    }
+
+    if (!result.ok && result.kind === 'missing_table') {
+      setNotice({
+        type: 'error',
+        message: '経費帳テーブルが未作成です（Supabaseに expenses を作成してください）。',
+      })
+      return
+    }
+
+    if (!result.ok && result.kind === 'error') {
+      setNotice({ type: 'error', message: `経費取得に失敗しました: ${result.message}` })
+      return
+    }
+
+    const sourceExpenses = result.ok ? result.expenses : expenses
+    const sourceClassifications = classifyExpenses(sourceExpenses)
+    const exportableExpenses = sourceExpenses.filter((expense) => {
+      const c = sourceClassifications.find((item) => item.expenseId === expense.id)
+      return c?.rank === 'OK'
+    })
+
+    if (exportableExpenses.length === 0) {
+      setNotice({
+        type: 'error',
+        message:
+          '期間内に自動判定OKの経費がありません。要確認キューを先に解消してください。',
+      })
+      return
+    }
+
+    const payload = exportableExpenses.map((expense) => ({
+      issue_date: expense.expense_date,
+      amount: expense.amount,
+      description: expense.description,
+      receipt_url: expense.receipt_url,
+      deal_type: 'expense',
+    }))
+
+    const content = JSON.stringify(
+      {
+        period_start: startDate,
+        period_end: endDate,
+        shop_id: activeShopId,
+        auto_classified: true,
+        excluded_count: sourceExpenses.length - exportableExpenses.length,
+        record_count: payload.length,
+        expenses: payload,
+      },
+      null,
+      2
+    )
+
+    downloadTextFile(
+      `freee-expense-draft-${startDate}-to-${endDate}.json`,
+      content,
+      'application/json;charset=utf-8;'
+    )
+    setNotice({ type: 'success', message: '経費JSONを出力しました。' })
   }
 
   const exportPeriodPdf = async () => {
@@ -1221,38 +2288,40 @@ export default function POSSystem() {
         </div>
       )}
 
-      <div className="sticky top-0 z-20 border-b border-slate-200 bg-white/90 backdrop-blur">
-        <div className="mx-auto flex w-full max-w-7xl gap-2 p-3">
-          <button
-            onClick={() => setTaxMode('takeout')}
-            className={`flex-1 rounded-xl px-4 py-4 text-lg font-bold transition ${
-              taxMode === 'takeout'
-                ? 'bg-orange-500 text-white shadow'
-                : 'bg-orange-50 text-orange-700 hover:bg-orange-100'
-            }`}
-          >
-            テイクアウト 8%
-          </button>
-          <button
-            onClick={() => setTaxMode('dine-in')}
-            className={`flex-1 rounded-xl px-4 py-4 text-lg font-bold transition ${
-              taxMode === 'dine-in'
-                ? 'bg-emerald-600 text-white shadow'
-                : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
-            }`}
-          >
-            店内飲食 10%
-          </button>
+      {mode === 'register' ? (
+        <div className="sticky top-0 z-20 border-b border-slate-200 bg-white/90 backdrop-blur">
+          <div className="mx-auto flex w-full max-w-7xl gap-2 p-3">
+            <button
+              onClick={() => setTaxMode('takeout')}
+              className={`flex-1 rounded-xl px-4 py-4 text-lg font-bold transition ${
+                taxMode === 'takeout'
+                  ? 'bg-orange-500 text-white shadow'
+                  : 'bg-orange-50 text-orange-700 hover:bg-orange-100'
+              }`}
+            >
+              テイクアウト 8%
+            </button>
+            <button
+              onClick={() => setTaxMode('dine-in')}
+              className={`flex-1 rounded-xl px-4 py-4 text-lg font-bold transition ${
+                taxMode === 'dine-in'
+                  ? 'bg-emerald-600 text-white shadow'
+                  : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+              }`}
+            >
+              店内飲食 10%
+            </button>
+          </div>
         </div>
-      </div>
+      ) : null}
 
       <div className="mx-auto w-full max-w-7xl p-4">
         <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div>
               <div className="flex items-center gap-2">
-                <h1 className="text-2xl font-black text-slate-900">
-                  {shopName ? `${shopName} 売上中枢` : '売上中枢'}
+                <h1 className="text-2xl text-slate-900">
+                  <span className="text-[1.05em] font-extrabold">{shopName || '店舗ダッシュボード'}</span>
                 </h1>
                 <button
                   onClick={() => {
@@ -1661,64 +2730,239 @@ export default function POSSystem() {
           <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
             <h2 className="text-xl font-bold text-slate-900">税務レポート（売上帳簿）</h2>
             <p className="mt-1 text-sm text-slate-500">
-              期間を指定して、売上・消費税・日次推移を集計します。CSV / PDFで保存できます。
+              税理士の最終チェック前までを自動化します。普段はワンタップだけで進めてください。
             </p>
 
-            <div className="mt-4 rounded-xl bg-slate-50 p-4">
-              <div className="flex flex-wrap items-end gap-3">
+            <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
-                  <label className="mb-1 block text-sm font-semibold">開始日</label>
-                  <input
-                    type="date"
-                    value={startDate}
-                    onChange={(event) => setStartDate(event.target.value)}
-                    className="rounded-lg border border-slate-300 p-2"
-                  />
+                  <h3 className="text-lg font-bold text-slate-900">申告コックピット（入力ゼロ）</h3>
+                  <p className="text-sm text-slate-600">
+                    分からなければワンタップ。知りたい人は中身を解剖できます。
+                  </p>
                 </div>
-                <div>
-                  <label className="mb-1 block text-sm font-semibold">終了日</label>
-                  <input
-                    type="date"
-                    value={endDate}
-                    onChange={(event) => setEndDate(event.target.value)}
-                    className="rounded-lg border border-slate-300 p-2"
-                  />
-                </div>
-
-                <button
-                  onClick={fetchPeriodSales}
-                  disabled={isPeriodLoading}
-                  className="rounded-lg bg-blue-600 px-4 py-2 font-bold text-white disabled:bg-slate-400"
-                >
-                  {isPeriodLoading ? '集計中...' : '集計'}
-                </button>
-
-                <div className="ml-auto flex flex-wrap gap-2">
+                <div className="flex flex-wrap gap-2">
                   <button
-                    onClick={() => applyRangePreset('thisMonth')}
-                    className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                    onClick={runAutopilotAndExport}
+                    disabled={isAutopilotRunning || isPeriodLoading || isAiClassifying}
+                    className="rounded-lg bg-slate-900 px-5 py-3 font-black text-white disabled:bg-slate-400"
                   >
-                    今月
+                    {isAutopilotRunning || isAiClassifying ? '自動処理中...' : '申告パックを自動作成（ワンタップ）'}
                   </button>
                   <button
-                    onClick={() => applyRangePreset('lastMonth')}
-                    className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                    type="button"
+                    onClick={() => setShowTaxDeepDive(true)}
+                    className="rounded-lg border border-slate-300 bg-white px-5 py-3 font-black text-slate-800"
                   >
-                    先月
-                  </button>
-                  <button
-                    onClick={() => applyRangePreset('thisYear')}
-                    className="rounded-md border border-slate-300 px-3 py-2 text-sm"
-                  >
-                    今年
+                    中身を解剖する
                   </button>
                 </div>
               </div>
+
+              <div className="mt-3 grid gap-2 md:grid-cols-3">
+                {workflowSteps.map((step) => (
+                  <div key={step.id} className={`rounded-md border px-3 py-2 text-sm font-semibold ${workflowStepClass(step.status)}`}>
+                    {step.label}
+                  </div>
+                ))}
+              </div>
+
+              <div className="mt-3 grid gap-3 sm:grid-cols-5">
+                <div className="rounded-lg bg-white p-3">
+                  <p className="text-xs text-slate-500">自動確定（OK）</p>
+                  <p className="text-xl font-black text-emerald-700">{expenseClassificationSummary.okCount}</p>
+                </div>
+                <div className="rounded-lg bg-white p-3">
+                  <p className="text-xs text-slate-500">要確認</p>
+                  <p className="text-xl font-black text-amber-700">{expenseClassificationSummary.reviewCount}</p>
+                </div>
+                <div className="rounded-lg bg-white p-3">
+                  <p className="text-xs text-slate-500">NG</p>
+                  <p className="text-xl font-black text-red-700">{expenseClassificationSummary.ngCount}</p>
+                </div>
+                <div className="rounded-lg bg-white p-3">
+                  <p className="text-xs text-slate-500">申告準備度</p>
+                  <p className={`text-xl font-black ${filingReadinessStatusClass(filingReadiness.status)}`}>
+                    {filingReadiness.score}%
+                  </p>
+                  <p className="text-xs text-slate-500">{filingReadinessStatusLabel(filingReadiness.status)}</p>
+                </div>
+                <div className="rounded-lg bg-white p-3">
+                  <p className="text-xs text-slate-500">出力判定</p>
+                  <p className={`text-xl font-black ${isExportBlocked ? 'text-red-700' : 'text-emerald-700'}`}>
+                    {isExportBlocked ? '保留' : '出力可能'}
+                  </p>
+                </div>
+              </div>
+              <p className="mt-2 text-xs text-slate-500">
+                要確認の許容上限は {expenseClassificationSummary.maxReviewAllowed} 件です（全件の10%まで）。
+              </p>
+              <div className="mt-3 rounded-lg border border-slate-200 bg-white p-3">
+                <p className="text-sm font-semibold text-slate-900">税理士に渡す前の不足項目</p>
+                {filingReadiness.items.filter((item) => item.status !== 'READY').length === 0 ? (
+                  <p className="mt-2 text-sm text-emerald-700">不足項目はありません。このまま提出パックを作成できます。</p>
+                ) : (
+                  <div className="mt-2 space-y-2">
+                    {filingReadiness.items
+                      .filter((item) => item.status !== 'READY')
+                      .map((item) => (
+                        <div key={item.id} className="rounded-md border border-slate-200 bg-slate-50 p-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="text-sm font-semibold text-slate-900">{item.title}</p>
+                            <span className={`rounded-full px-2 py-1 text-xs font-semibold ${filingItemStatusClass(item.status)}`}>
+                              {filingItemStatusLabel(item.status)}
+                            </span>
+                          </div>
+                          <p className="mt-1 text-xs text-slate-600">{item.reason}</p>
+                        </div>
+                      ))}
+                  </div>
+                )}
+              </div>
             </div>
 
+            <details
+              className="mt-4 rounded-xl border border-slate-200 bg-white p-4"
+              open={showTaxDeepDive}
+              onToggle={(event) => {
+                const nextOpen = (event.currentTarget as HTMLDetailsElement).open
+                setShowTaxDeepDive(nextOpen)
+              }}
+            >
+              <summary className="cursor-pointer select-none text-base font-black text-slate-900">
+                ブラックボックスを解剖する（詳細）
+              </summary>
+              <p className="mt-2 text-sm text-slate-600">
+                期間・内訳・根拠を見ながら自分で納得して進めたい人向けです。分からなければ閉じてワンタップだけでOKです。
+              </p>
+
+              <div className="mt-4 rounded-xl bg-slate-50 p-4">
+                <div className="flex flex-wrap items-end gap-3">
+                  <div>
+                    <label className="mb-1 block text-sm font-semibold">開始日</label>
+                    <input
+                      type="date"
+                      value={startDate}
+                      onChange={(event) => setStartDate(event.target.value)}
+                      className="rounded-lg border border-slate-300 p-2"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-sm font-semibold">終了日</label>
+                    <input
+                      type="date"
+                      value={endDate}
+                      onChange={(event) => setEndDate(event.target.value)}
+                      className="rounded-lg border border-slate-300 p-2"
+                    />
+                  </div>
+
+                  <button
+                    onClick={() => void fetchPeriodSales()}
+                    disabled={isPeriodLoading}
+                    className="rounded-lg bg-blue-600 px-4 py-2 font-bold text-white disabled:bg-slate-400"
+                  >
+                    {isPeriodLoading ? '集計中...' : '集計'}
+                  </button>
+
+                  <div className="ml-auto flex flex-wrap gap-2">
+                    <button
+                      onClick={() => applyRangePreset('thisMonth')}
+                      className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                    >
+                      今月
+                    </button>
+                    <button
+                      onClick={() => applyRangePreset('lastMonth')}
+                      className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                    >
+                      先月
+                    </button>
+                    <button
+                      onClick={() => applyRangePreset('thisYear')}
+                      className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                    >
+                      今年
+                    </button>
+                  </div>
+                </div>
+	              </div>
+
+              <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-4">
+                <h3 className="text-lg font-bold text-slate-900">税理士引き継ぎチェック（詳細）</h3>
+                <p className="mt-1 text-sm text-slate-600">
+                  ここで「要対応」をゼロに近づけるほど、税理士の最終確認だけで提出しやすくなります。
+                </p>
+                <div className="mt-3 space-y-2">
+                  {filingReadiness.items.map((item) => (
+                    <div key={item.id} className="rounded-lg border border-slate-200 bg-white p-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-sm font-semibold text-slate-900">{item.title}</p>
+                        <span className={`rounded-full px-2 py-1 text-xs font-semibold ${filingItemStatusClass(item.status)}`}>
+                          {filingItemStatusLabel(item.status)}
+                        </span>
+                      </div>
+                      <p className="mt-1 text-xs text-slate-600">理由: {item.reason}</p>
+                      <p className="mt-1 text-xs text-slate-500">対応: {item.action}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+	            <div className="mt-4 rounded-xl border border-slate-200 bg-amber-50/40 p-4">
+	              <div className="flex flex-wrap items-center justify-between gap-2">
+	                <h3 className="text-lg font-bold text-slate-900">導入チェック</h3>
+                <div className="flex gap-2">
+                  <button
+                    onClick={runSetupChecks}
+                    disabled={isSetupChecking}
+                    className="rounded-md border border-slate-300 bg-white px-3 py-1 text-sm font-semibold disabled:bg-slate-100"
+                  >
+                    {isSetupChecking ? '確認中...' : '再チェック'}
+                  </button>
+                  {setupIssues.length > 0 && (
+                    <button
+                      onClick={() => setIsLedgerTemporarilyDisabled(true)}
+                      className="rounded-md border border-red-200 bg-white px-3 py-1 text-sm font-semibold text-red-700"
+                    >
+                      経費/在庫を一時オフ
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {setupIssues.length === 0 ? (
+                <p className="mt-2 text-sm text-emerald-700">
+                  導入チェックは正常です。必要なテーブル・バケット・環境キーを確認しました。
+                </p>
+              ) : (
+                <div className="mt-3 space-y-3">
+                  {setupIssues.map((issue) => (
+                    <div key={issue.id} className="rounded-lg border border-amber-200 bg-white p-3">
+                      <p className="font-semibold text-slate-900">{issue.title}</p>
+                      <p className="mt-1 text-sm text-slate-600">{issue.detail}</p>
+                      <p className="mt-2 text-xs font-semibold text-slate-700">{issue.actionLabel}</p>
+                      <pre className="mt-1 overflow-x-auto rounded-md bg-slate-900 p-3 text-xs text-slate-100">
+{issue.actionBody}
+                      </pre>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {isLedgerFeatureEnabled ? (
             <div className="mt-4 grid gap-4 xl:grid-cols-[1.4fr_1fr]">
               <section className="rounded-xl border border-slate-200 p-4">
-                <h3 className="text-lg font-bold text-slate-900">超シンプル経費帳</h3>
+                <div className="flex items-center justify-between gap-2">
+                  <h3 className="text-lg font-bold text-slate-900">超シンプル経費帳</h3>
+                  <button
+                    onClick={fetchPeriodExpenses}
+                    className="rounded-md border border-slate-300 bg-white px-3 py-1 text-sm"
+                  >
+                    経費を再取得
+                  </button>
+                </div>
                 <p className="mt-1 text-sm text-slate-500">
                   日付・金額・内容・レシート写真だけ記録します（期間内データを表示）。
                 </p>
@@ -1799,6 +3043,7 @@ export default function POSSystem() {
                         <th className="p-2 text-left">日付</th>
                         <th className="p-2 text-left">内容</th>
                         <th className="p-2 text-right">金額</th>
+                        <th className="p-2 text-left">自動判定</th>
                         <th className="p-2 text-center">レシート</th>
                         <th className="p-2 text-center">削除</th>
                       </tr>
@@ -1806,22 +3051,47 @@ export default function POSSystem() {
                     <tbody>
                       {isExpenseLoading ? (
                         <tr>
-                          <td colSpan={5} className="p-3 text-center text-slate-500">
+                          <td colSpan={6} className="p-3 text-center text-slate-500">
                             経費を読み込み中...
                           </td>
                         </tr>
                       ) : expenses.length === 0 ? (
                         <tr>
-                          <td colSpan={5} className="p-3 text-center text-slate-500">
+                          <td colSpan={6} className="p-3 text-center text-slate-500">
                             この期間の経費はまだありません。
                           </td>
                         </tr>
                       ) : (
-                        expenses.map((expense) => (
-                          <tr key={expense.id} className="border-b border-slate-100">
+                        expenses.map((expense) => {
+                          const classification = expenseClassificationMap.get(expense.id)
+                          const rank = classification?.rank ?? 'REVIEW'
+                          return (
+                            <tr key={expense.id} className="border-b border-slate-100">
                             <td className="p-2">{formatDate(`${expense.expense_date}T00:00:00`)}</td>
                             <td className="p-2">{expense.description}</td>
                             <td className="p-2 text-right font-semibold">{formatYen(expense.amount)}</td>
+                            <td className="p-2 text-xs">
+                              <span
+                                className={`rounded-full px-2 py-1 font-semibold ${
+                                  rank === 'OK'
+                                    ? 'bg-emerald-100 text-emerald-700'
+                                    : rank === 'NG'
+                                      ? 'bg-red-100 text-red-700'
+                                      : 'bg-amber-100 text-amber-700'
+                                }`}
+                              >
+                                {rank === 'OK' ? 'OK' : rank === 'NG' ? 'NG' : '要確認'}
+                              </span>
+                              <p className="mt-1 text-[11px] text-slate-500">
+                                {classification?.accountItem ?? '雑費'} / 信頼度 {classification?.confidence ?? 0}%
+                              </p>
+                              <p className="text-[11px] text-slate-500">{classification?.reason ?? '判定未実行'}</p>
+                              {classification?.provider ? (
+                                <p className="text-[11px] text-slate-400">
+                                  {classification.provider} ({classification.model ?? '-'})
+                                </p>
+                              ) : null}
+                            </td>
                             <td className="p-2 text-center">
                               {expense.receipt_url ? (
                                 <a
@@ -1844,8 +3114,9 @@ export default function POSSystem() {
                                 削除
                               </button>
                             </td>
-                          </tr>
-                        ))
+                            </tr>
+                          )
+                        })
                       )}
                     </tbody>
                   </table>
@@ -1891,7 +3162,7 @@ export default function POSSystem() {
                         {isSavingInventory ? '保存中...' : '在庫額を保存'}
                       </button>
                       <button
-                        onClick={fetchInventoryAdjustment}
+                        onClick={() => void fetchInventoryAdjustment()}
                         className="rounded-lg border border-slate-300 px-4 py-2 font-semibold"
                       >
                         読み直し
@@ -1926,8 +3197,27 @@ export default function POSSystem() {
                     </div>
                   </div>
                 </div>
+
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                  <h3 className="text-lg font-bold text-slate-900">店主向けモード（ワンタップ）</h3>
+                  <p className="mt-1 text-sm text-slate-600">
+                    freee接続や個別設定は不要です。上の「申告パックを自動作成（ワンタップ）」だけ押せば、
+                    集計と判定を実行して提出用ファイルをまとめて出力します。
+                  </p>
+                </div>
               </section>
             </div>
+            ) : (
+              <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
+                <p>経費/在庫機能は一時オフです。設定修正後に再表示できます。</p>
+                <button
+                  onClick={() => setIsLedgerTemporarilyDisabled(false)}
+                  className="mt-2 rounded-md border border-slate-300 bg-white px-3 py-1 text-sm font-semibold"
+                >
+                  再表示
+                </button>
+              </div>
+            )}
 
             {periodSales.length > 0 ? (
               <div className="mt-4 space-y-4">
@@ -2025,21 +3315,59 @@ export default function POSSystem() {
                   </div>
 
                   <div className="rounded-xl border border-slate-200 p-4">
-                    <h3 className="mb-3 font-bold text-slate-900">エクスポート</h3>
-                    <div className="space-y-2">
-                      <button
-                        onClick={exportPeriodCsv}
-                        className="w-full rounded-lg border border-slate-300 bg-white px-4 py-3 font-semibold"
-                      >
-                        CSVで保存
-                      </button>
-                      <button
-                        onClick={exportPeriodPdf}
-                        className="w-full rounded-lg bg-red-600 px-4 py-3 font-semibold text-white"
-                      >
-                        PDFで保存
-                      </button>
-                    </div>
+                    <h3 className="mb-3 font-bold text-slate-900">エクスポート（提出用）</h3>
+                    <button
+                      onClick={exportTaxPackManually}
+                      disabled={isExportBlocked}
+                      className="w-full rounded-lg bg-emerald-600 px-4 py-3 font-semibold text-white disabled:bg-slate-400"
+                    >
+                      申告パックZIPを保存
+                    </button>
+                    <p className="mt-2 text-xs text-slate-500">
+                      通常はこの1つだけ使えば十分です。個別ファイルは必要なときだけ下で展開します。
+                    </p>
+                    <details className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                      <summary className="cursor-pointer select-none text-sm font-semibold text-slate-700">
+                        詳細出力（個別CSV/PDF）
+                      </summary>
+                      <div className="mt-3 space-y-2">
+                        <button
+                          onClick={exportMonthlyCsvPack}
+                          disabled={isExportBlocked}
+                          className="w-full rounded-lg border border-slate-300 bg-white px-4 py-2 font-semibold"
+                        >
+                          月次CSV 3点をまとめて保存
+                        </button>
+                        <button
+                          onClick={exportSalesCsv}
+                          disabled={isExportBlocked}
+                          className="w-full rounded-lg border border-slate-300 bg-white px-4 py-2 font-semibold"
+                        >
+                          売上CSV
+                        </button>
+                        <button
+                          onClick={exportExpensesCsv}
+                          disabled={isExportBlocked}
+                          className="w-full rounded-lg border border-slate-300 bg-white px-4 py-2 font-semibold"
+                        >
+                          経費CSV
+                        </button>
+                        <button
+                          onClick={exportProfitSummaryCsv}
+                          disabled={isExportBlocked}
+                          className="w-full rounded-lg border border-slate-300 bg-white px-4 py-2 font-semibold"
+                        >
+                          利益サマリーCSV
+                        </button>
+                        <button
+                          onClick={exportPeriodPdf}
+                          disabled={isExportBlocked}
+                          className="w-full rounded-lg border border-slate-300 bg-white px-4 py-2 font-semibold"
+                        >
+                          PDFで保存
+                        </button>
+                      </div>
+                    </details>
                   </div>
                 </div>
 
@@ -2083,6 +3411,7 @@ export default function POSSystem() {
                 期間を指定して「集計」を押すと、税務レポートを表示します。
               </div>
             )}
+            </details>
           </div>
         )}
       </div>
