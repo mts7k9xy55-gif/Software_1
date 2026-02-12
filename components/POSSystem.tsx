@@ -2733,7 +2733,7 @@ export default function POSSystem() {
                 <div>
                   <h3 className="text-lg font-bold text-slate-900">申告コックピット（入力ゼロ）</h3>
                   <p className="text-sm text-slate-600">
-                    分からなければワンタップ。知りたい人は中身を解剖できます。
+                    分からなければワンタップ。必要なときだけ詳細を確認できます。
                   </p>
                 </div>
                 <div className="flex flex-wrap gap-2">
@@ -2742,14 +2742,14 @@ export default function POSSystem() {
                     disabled={isAutopilotRunning || isPeriodLoading || isAiClassifying}
                     className="rounded-lg bg-slate-900 px-5 py-3 font-black text-white disabled:bg-slate-400"
                   >
-                    {isAutopilotRunning || isAiClassifying ? '自動処理中...' : '申告パックを自動作成（ワンタップ）'}
+                    {isAutopilotRunning || isAiClassifying ? '自動処理中...' : '申告提出パックを作成して保存'}
                   </button>
                   <button
                     type="button"
                     onClick={() => setShowTaxDeepDive(true)}
                     className="rounded-lg border border-slate-300 bg-white px-5 py-3 font-black text-slate-800"
                   >
-                    詳細のみ
+                    詳細を見る
                   </button>
                 </div>
               </div>
@@ -2824,7 +2824,7 @@ export default function POSSystem() {
                 setShowTaxDeepDive(nextOpen)
               }}
             >
-              <summary className="cursor-pointer select-none text-base font-black text-slate-900">詳細のみ</summary>
+              <summary className="cursor-pointer select-none text-base font-black text-slate-900">詳細を見る</summary>
               <p className="mt-2 text-sm text-slate-600">
                 期間・内訳・根拠を見ながら自分で納得して進めたい人向けです。分からなければ閉じてワンタップだけでOKです。
               </p>
@@ -3192,9 +3192,9 @@ export default function POSSystem() {
                 </div>
 
                 <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-                  <h3 className="text-lg font-bold text-slate-900">店主向けモード（ワンタップ）</h3>
+                  <h3 className="text-lg font-bold text-slate-900">店主向けモード（かんたん実行）</h3>
                   <p className="mt-1 text-sm text-slate-600">
-                    freee接続や個別設定は不要です。上の「申告パックを自動作成（ワンタップ）」だけ押せば、
+                    freee接続や個別設定は不要です。上の「申告提出パックを作成して保存」を押せば、
                     集計と判定を実行して提出用ファイルをまとめて出力します。
                   </p>
                 </div>
