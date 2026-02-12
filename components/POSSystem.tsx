@@ -2093,14 +2093,14 @@ export default function POSSystem() {
       return
     }
     await downloadTaxPackZip()
-    setNotice({ type: 'success', message: '申告パック（zip）を出力しました。' })
+    setNotice({ type: 'success', message: '税理士共有パック（zip）を出力しました。' })
   }
 
   const runAutopilotAndExport = async () => {
     const workflowResult = await runAutopilotWorkflow()
     if (!workflowResult || workflowResult.readiness.exportBlocked) return
     await downloadTaxPackZip()
-    setNotice({ type: 'success', message: '申告パック（zip）を出力しました。' })
+    setNotice({ type: 'success', message: '税理士共有パック（zip）を出力しました。' })
   }
 
   useEffect(() => {
@@ -2723,33 +2723,26 @@ export default function POSSystem() {
 
         {mode === 'tax' && (
           <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-            <h2 className="text-xl font-bold text-slate-900">税務レポート（売上帳簿）</h2>
-            <p className="mt-1 text-sm text-slate-500">
-              税理士の最終チェック前までを自動化します。普段はワンタップだけで進めてください。
+            <h2 className="text-2xl font-bold text-slate-900">税務レポート（税理士共有用）</h2>
+            <p className="mt-1 text-base text-slate-600">
+              税理士の最終チェック前までを自動化します。普段は共有パックの保存だけで進めてください。
             </p>
 
             <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-4">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
-                  <h3 className="text-lg font-bold text-slate-900">申告コックピット（入力ゼロ）</h3>
-                  <p className="text-sm text-slate-600">
-                    分からなければワンタップ。必要なときだけ詳細を確認できます。
+                  <h3 className="text-xl font-bold text-slate-900">申告コックピット（入力ゼロ）</h3>
+                  <p className="text-base text-slate-700">
+                    分からなければワンタップ。必要なときだけ下の詳細を確認できます。
                   </p>
                 </div>
                 <div className="flex flex-wrap gap-2">
                   <button
                     onClick={runAutopilotAndExport}
                     disabled={isAutopilotRunning || isPeriodLoading || isAiClassifying}
-                    className="rounded-lg bg-slate-900 px-5 py-3 font-black text-white disabled:bg-slate-400"
+                    className="rounded-lg bg-slate-900 px-6 py-3 text-base font-black text-white disabled:bg-slate-400"
                   >
-                    {isAutopilotRunning || isAiClassifying ? '自動処理中...' : '申告提出パックを作成して保存'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setShowTaxDeepDive(true)}
-                    className="rounded-lg border border-slate-300 bg-white px-5 py-3 font-black text-slate-800"
-                  >
-                    詳細を見る
+                    {isAutopilotRunning || isAiClassifying ? '自動処理中...' : '税理士共有パックを作成して保存'}
                   </button>
                 </div>
               </div>
@@ -2789,7 +2782,7 @@ export default function POSSystem() {
                   </p>
                 </div>
               </div>
-              <p className="mt-2 text-xs text-slate-500">
+              <p className="mt-2 text-sm text-slate-600">
                 要確認の許容上限は {expenseClassificationSummary.maxReviewAllowed} 件です（全件の10%まで）。
               </p>
               <div className="mt-3 rounded-lg border border-slate-200 bg-white p-3">
@@ -3194,7 +3187,7 @@ export default function POSSystem() {
                 <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
                   <h3 className="text-lg font-bold text-slate-900">店主向けモード（かんたん実行）</h3>
                   <p className="mt-1 text-sm text-slate-600">
-                    freee接続や個別設定は不要です。上の「申告提出パックを作成して保存」を押せば、
+                    freee接続や個別設定は不要です。上の「税理士共有パックを作成して保存」を押せば、
                     集計と判定を実行して提出用ファイルをまとめて出力します。
                   </p>
                 </div>
@@ -3308,13 +3301,13 @@ export default function POSSystem() {
                   </div>
 
                   <div className="rounded-xl border border-slate-200 p-4">
-                    <h3 className="mb-3 font-bold text-slate-900">エクスポート（提出用）</h3>
+                    <h3 className="mb-3 text-lg font-bold text-slate-900">エクスポート（提出用）</h3>
                     <button
                       onClick={exportTaxPackManually}
                       disabled={isExportBlocked}
-                      className="w-full rounded-lg bg-emerald-600 px-4 py-3 font-semibold text-white disabled:bg-slate-400"
+                      className="w-full rounded-lg bg-emerald-600 px-4 py-3 text-base font-semibold text-white disabled:bg-slate-400"
                     >
-                      申告パックZIPを保存
+                      税理士共有パックZIPを保存
                     </button>
                     <p className="mt-2 text-xs text-slate-500">
                       通常はこの1つだけ使えば十分です。個別ファイルは必要なときだけ下で展開します。
