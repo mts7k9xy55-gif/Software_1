@@ -2288,35 +2288,8 @@ export default function POSSystem() {
         </div>
       )}
 
-      {mode === 'register' ? (
-        <div className="sticky top-0 z-20 border-b border-slate-200 bg-white/90 backdrop-blur">
-          <div className="mx-auto flex w-full max-w-7xl gap-2 p-3">
-            <button
-              onClick={() => setTaxMode('takeout')}
-              className={`flex-1 rounded-xl px-4 py-4 text-lg font-bold transition ${
-                taxMode === 'takeout'
-                  ? 'bg-orange-500 text-white shadow'
-                  : 'bg-orange-50 text-orange-700 hover:bg-orange-100'
-              }`}
-            >
-              テイクアウト 8%
-            </button>
-            <button
-              onClick={() => setTaxMode('dine-in')}
-              className={`flex-1 rounded-xl px-4 py-4 text-lg font-bold transition ${
-                taxMode === 'dine-in'
-                  ? 'bg-emerald-600 text-white shadow'
-                  : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
-              }`}
-            >
-              店内飲食 10%
-            </button>
-          </div>
-        </div>
-      ) : null}
-
       <div className="mx-auto w-full max-w-7xl p-4">
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="sticky top-0 z-20 rounded-2xl border border-slate-200 bg-white/95 p-4 shadow-sm backdrop-blur">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div>
               <div className="flex items-center gap-2">
@@ -2386,6 +2359,28 @@ export default function POSSystem() {
         {mode === 'register' && (
           <div className="mt-4 grid gap-4 xl:grid-cols-[2fr_1fr]">
             <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+              <div className="mb-4 grid gap-2 sm:grid-cols-2">
+                <button
+                  onClick={() => setTaxMode('takeout')}
+                  className={`rounded-xl px-4 py-3 text-base font-bold transition ${
+                    taxMode === 'takeout'
+                      ? 'bg-orange-500 text-white shadow'
+                      : 'bg-orange-50 text-orange-700 hover:bg-orange-100'
+                  }`}
+                >
+                  テイクアウト 8%
+                </button>
+                <button
+                  onClick={() => setTaxMode('dine-in')}
+                  className={`rounded-xl px-4 py-3 text-base font-bold transition ${
+                    taxMode === 'dine-in'
+                      ? 'bg-emerald-600 text-white shadow'
+                      : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                  }`}
+                >
+                  店内飲食 10%
+                </button>
+              </div>
               <div className="mb-4 flex items-center justify-between">
                 <h2 className="text-lg font-bold text-slate-900">メニューから注文を作成</h2>
                 <button
@@ -2754,7 +2749,7 @@ export default function POSSystem() {
                     onClick={() => setShowTaxDeepDive(true)}
                     className="rounded-lg border border-slate-300 bg-white px-5 py-3 font-black text-slate-800"
                   >
-                    中身を解剖する
+                    詳細のみ
                   </button>
                 </div>
               </div>
@@ -2829,9 +2824,7 @@ export default function POSSystem() {
                 setShowTaxDeepDive(nextOpen)
               }}
             >
-              <summary className="cursor-pointer select-none text-base font-black text-slate-900">
-                ブラックボックスを解剖する（詳細）
-              </summary>
+              <summary className="cursor-pointer select-none text-base font-black text-slate-900">詳細のみ</summary>
               <p className="mt-2 text-sm text-slate-600">
                 期間・内訳・根拠を見ながら自分で納得して進めたい人向けです。分からなければ閉じてワンタップだけでOKです。
               </p>
