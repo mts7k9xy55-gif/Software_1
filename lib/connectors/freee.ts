@@ -18,6 +18,7 @@ export interface FreeeSession {
   accessToken: string
   refreshToken: string
   companyId: number | null
+  sharedMode: boolean
 }
 
 export type FreeeAccountItem = {
@@ -33,11 +34,21 @@ export type FreeeTax = {
 }
 
 export function readFreeeSession(cookieStore: ReadonlyRequestCookies): FreeeSession {
-  const accessToken = cookieStore.get('freee_access_token')?.value ?? ''
-  const refreshToken = cookieStore.get('freee_refresh_token')?.value ?? ''
-  const companyRaw = cookieStore.get('freee_company_id')?.value ?? ''
+  const cookieAccess = cookieStore.get('freee_access_token')?.value ?? ''
+  const cookieRefresh = cookieStore.get('freee_refresh_token')?.value ?? ''
+  const cookieCompany = cookieStore.get('freee_company_id')?.value ?? ''
+
+  const sharedMode = (process.env.FREEE_SHARED_MODE ?? '0') === '1'
+  const sharedAccess = process.env.FREEE_SHARED_ACCESS_TOKEN ?? ''
+  const sharedRefresh = process.env.FREEE_SHARED_REFRESH_TOKEN ?? ''
+  const sharedCompany = process.env.FREEE_SHARED_COMPANY_ID ?? ''
+
+  const accessToken = cookieAccess || (sharedMode ? sharedAccess : '')
+  const refreshToken = cookieRefresh || (sharedMode ? sharedRefresh : '')
+  const companyRaw = cookieCompany || (sharedMode ? sharedCompany : '')
   const companyId = companyRaw && /^\d+$/.test(companyRaw) ? Number(companyRaw) : null
-  return { accessToken, refreshToken, companyId }
+
+  return { accessToken, refreshToken, companyId, sharedMode }
 }
 
 export function applyRefreshedFreeeCookies(

@@ -24,6 +24,7 @@ type ConnectorStatus = {
     connected: boolean
     companyId: number | null
     nextAction: string
+    mode?: 'shared_token' | 'oauth_per_user'
   }
   ocr: {
     enabled: boolean
@@ -337,7 +338,7 @@ export default function FilingOrchestratorApp() {
         <header className="sticky top-0 z-10 rounded-2xl border border-slate-200 bg-white/95 p-4 shadow-sm backdrop-blur">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <h1 className="text-2xl font-black text-slate-900">Global Filing Orchestrator</h1>
+              <h1 className="text-2xl font-black text-slate-900">Tax man</h1>
               <p className="text-sm text-slate-500">店主入力を最小化し、税理士の最終チェックに集中する運用</p>
             </div>
             <div className="flex items-center gap-2">
@@ -360,7 +361,7 @@ export default function FilingOrchestratorApp() {
                   : 'border border-slate-300 bg-white text-slate-700'
               }`}
             >
-              All Transactions
+              取引取込
             </button>
             <button
               onClick={() => setTab('queue')}
@@ -368,7 +369,7 @@ export default function FilingOrchestratorApp() {
                 tab === 'queue' ? 'bg-slate-900 text-white' : 'border border-slate-300 bg-white text-slate-700'
               }`}
             >
-              Decision Queue
+              判定キュー
             </button>
             <button
               onClick={() => void refreshStatus()}
@@ -397,7 +398,7 @@ export default function FilingOrchestratorApp() {
             <div className="space-y-4">
               <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <h2 className="text-lg font-bold text-slate-900">Receipt OCR Intake</h2>
+                <h2 className="text-lg font-bold text-slate-900">OCR取込</h2>
                   <div className="flex gap-2">
                     <button
                       onClick={() => {
@@ -405,7 +406,7 @@ export default function FilingOrchestratorApp() {
                       }}
                       className="rounded-lg bg-blue-600 px-3 py-2 text-sm font-bold text-white"
                     >
-                      freee接続
+                    freee連携
                     </button>
                     <button
                       onClick={() => {
@@ -413,7 +414,7 @@ export default function FilingOrchestratorApp() {
                       }}
                       className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold"
                     >
-                      freee解除
+                    連携解除
                     </button>
                   </div>
                 </div>
@@ -439,7 +440,7 @@ export default function FilingOrchestratorApp() {
               </div>
 
               <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-                <h2 className="text-lg font-bold text-slate-900">Manual Intake</h2>
+                <h2 className="text-lg font-bold text-slate-900">手入力取込</h2>
                 <p className="mt-1 text-sm text-slate-600">紙導入でも使える最小入力です。保存先はfreee下書きです。</p>
 
                 <form onSubmit={handleManualIntake} className="mt-3 grid gap-3 md:grid-cols-2">
@@ -485,7 +486,7 @@ export default function FilingOrchestratorApp() {
               </div>
 
               <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-                <h2 className="text-lg font-bold text-slate-900">Current Session Intake</h2>
+                <h2 className="text-lg font-bold text-slate-900">今回の取込結果</h2>
                 <div className="mt-3 grid gap-2 sm:grid-cols-4">
                   <div className="rounded-lg bg-slate-50 p-3 text-sm">
                     <p className="text-xs text-slate-500">Total</p>
@@ -509,29 +510,35 @@ export default function FilingOrchestratorApp() {
 
             <aside className="space-y-4">
               <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-                <h3 className="text-base font-bold text-slate-900">Connector Status</h3>
+                <h3 className="text-base font-bold text-slate-900">連携状態</h3>
                 <div className="mt-2 space-y-2 text-sm">
                   <div className="flex justify-between rounded-md bg-slate-50 px-3 py-2">
                     <span>freee</span>
                     <span className={status?.freee.connected ? 'font-bold text-emerald-700' : 'font-bold text-red-700'}>
-                      {status?.freee.connected ? 'Connected' : 'Not connected'}
+                      {status?.freee.connected ? '接続済み' : '未接続'}
                     </span>
                   </div>
                   <div className="flex justify-between rounded-md bg-slate-50 px-3 py-2">
                     <span>OCR</span>
                     <span className={status?.ocr.enabled ? 'font-bold text-emerald-700' : 'font-bold text-amber-700'}>
-                      {status?.ocr.enabled ? 'Enabled' : 'Disabled'}
+                      {status?.ocr.enabled ? '有効' : '無効'}
                     </span>
                   </div>
                   <div className="flex justify-between rounded-md bg-slate-50 px-3 py-2">
-                    <span>Model</span>
+                    <span>モデル</span>
                     <span className="font-semibold text-slate-700">{status?.llm.model ?? '-'}</span>
+                  </div>
+                  <div className="flex justify-between rounded-md bg-slate-50 px-3 py-2">
+                    <span>接続方式</span>
+                    <span className="font-semibold text-slate-700">
+                      {status?.freee.mode === 'shared_token' ? '共通トークン' : 'ユーザーOAuth'}
+                    </span>
                   </div>
                 </div>
               </div>
 
               <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-                <h3 className="text-base font-bold text-slate-900">Policy</h3>
+                <h3 className="text-base font-bold text-slate-900">注意</h3>
                 <p className="mt-2 text-xs text-slate-600">
                   税務判断の最終責任は専門家にあります。サービスは判定補助と下書き作成を提供します。
                 </p>
@@ -547,14 +554,14 @@ export default function FilingOrchestratorApp() {
           <section className="mt-4 space-y-4">
             <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <h2 className="text-lg font-bold text-slate-900">Decision Queue</h2>
+                <h2 className="text-lg font-bold text-slate-900">判定キュー</h2>
                 <div className="flex gap-2">
                   <button
                     onClick={() => void refreshFreeeQueue()}
                     disabled={isLoadingQueue}
                     className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold disabled:bg-slate-100"
                   >
-                    {isLoadingQueue ? '取得中...' : 'freeeレビュー取得'}
+                    {isLoadingQueue ? '取得中...' : 'freee下書きを取得'}
                   </button>
                   <button
                     onClick={postDrafts}
@@ -656,7 +663,7 @@ export default function FilingOrchestratorApp() {
             </div>
 
             <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-              <h3 className="text-base font-bold text-slate-900">freee Review Queue (from freee)</h3>
+                <h3 className="text-base font-bold text-slate-900">freeeレビューキュー</h3>
               <div className="mt-3 max-h-72 overflow-y-auto rounded-lg border border-slate-200">
                 <table className="w-full text-sm">
                   <thead className="sticky top-0 bg-slate-50">

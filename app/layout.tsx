@@ -7,7 +7,7 @@ import PWARegister from '@/components/PWARegister'
 const inter = Inter({ subsets: ['latin'] })
 
 export const metadata: Metadata = {
-  title: 'ALLGOAI Filing Orchestrator',
+  title: 'Tax man',
   description: 'Global filing automation with accountant-first review flow',
   manifest: '/manifest.json',
   icons: {

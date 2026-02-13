@@ -23,6 +23,7 @@ export async function GET() {
       connected: Boolean(session.accessToken),
       companyId: session.companyId,
       nextAction: session.accessToken ? 'connected' : 'open_oauth',
+      mode: session.sharedMode ? 'shared_token' : 'oauth_per_user',
     },
     ocr: {
       enabled: (process.env.ENABLE_RECEIPT_OCR ?? '0') === '1',

@@ -36,6 +36,15 @@ ENABLE_EXTERNAL_LLM=1
 ENABLE_RECEIPT_OCR=1
 ```
 
+Shared-token mode (optional, owner token for all users):
+
+```bash
+FREEE_SHARED_MODE=1
+FREEE_SHARED_ACCESS_TOKEN=...
+FREEE_SHARED_REFRESH_TOKEN=...
+FREEE_SHARED_COMPANY_ID=1234567
+```
+
 Optional for legacy endpoints only:
 
 ```bash
