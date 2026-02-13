@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useClerk, useUser } from '@clerk/nextjs'
 
 import type { CanonicalTransaction, ClassificationDecision, PostingCommand, PostingResult } from '@/lib/core/types'
+import type { RegionDefinition } from '@/lib/core/regions'
 
 type TabKey = 'transactions' | 'queue'
 
@@ -39,6 +40,13 @@ type ConnectorStatus = {
     owner_scope: string
     freee_scope: string
   }
+  region?: {
+    code: string
+    name: string
+    countryCode: string
+    uxLabel: string
+    platforms: Array<{ key: string; name: string; category: string; status: string }>
+  }
 }
 
 type FreeeQueueRow = {
@@ -49,10 +57,15 @@ type FreeeQueueRow = {
   memo: string
 }
 
-function formatYen(value: number): string {
-  return new Intl.NumberFormat('ja-JP', {
+type FilingOrchestratorAppProps = {
+  region: RegionDefinition
+  onSwitchRegion: () => void
+}
+
+function formatMoney(value: number, currency: string): string {
+  return new Intl.NumberFormat('en-US', {
     style: 'currency',
-    currency: 'JPY',
+    currency,
     maximumFractionDigits: 0,
   }).format(Number.isFinite(value) ? value : 0)
 }
@@ -69,7 +82,7 @@ async function fileToDataUrl(file: File): Promise<string> {
   })
 }
 
-export default function FilingOrchestratorApp() {
+export default function FilingOrchestratorApp({ region, onSwitchRegion }: FilingOrchestratorAppProps) {
   const { user } = useUser()
   const { signOut } = useClerk()
 
@@ -93,6 +106,8 @@ export default function FilingOrchestratorApp() {
   const [isSubmittingManual, setIsSubmittingManual] = useState(false)
   const [isPostingDraft, setIsPostingDraft] = useState(false)
 
+  const isFreeePrimaryRegion = region.code === 'JP'
+
   const postableCommands = useMemo<PostingCommand[]>(() => {
     return records
       .filter((record) => record.decision.rank === 'OK' && record.decision.is_expense && !record.posted?.ok)
@@ -109,7 +124,7 @@ export default function FilingOrchestratorApp() {
   const refreshStatus = async () => {
     setIsLoadingStatus(true)
     try {
-      const response = await fetch('/api/connectors/status', { cache: 'no-store' })
+      const response = await fetch(`/api/connectors/status?region=${region.code}`, { cache: 'no-store' })
       const data = (await response.json()) as { ok?: boolean; status?: ConnectorStatus; diagnostic_code?: string }
       if (!response.ok || !data.ok || !data.status) {
         setNotice({ type: 'error', message: `接続状態の取得に失敗しました (${data.diagnostic_code ?? response.status})` })
@@ -127,6 +142,11 @@ export default function FilingOrchestratorApp() {
   }
 
   const refreshFreeeQueue = async () => {
+    if (!isFreeePrimaryRegion) {
+      setFreeeQueue([])
+      return
+    }
+
     setIsLoadingQueue(true)
     try {
       const response = await fetch('/api/queue/review?limit=30', { cache: 'no-store' })
@@ -134,13 +154,9 @@ export default function FilingOrchestratorApp() {
         ok?: boolean
         queue?: FreeeQueueRow[]
         diagnostic_code?: string
-        message?: string
       }
       if (!response.ok || !data.ok || !Array.isArray(data.queue)) {
-        setNotice({
-          type: 'error',
-          message: `freeeレビュー取得に失敗しました (${data.diagnostic_code ?? response.status})`,
-        })
+        setNotice({ type: 'error', message: `freeeレビュー取得に失敗しました (${data.diagnostic_code ?? response.status})` })
         return
       }
       setFreeeQueue(data.queue)
@@ -154,7 +170,9 @@ export default function FilingOrchestratorApp() {
   useEffect(() => {
     void refreshStatus()
     void refreshFreeeQueue()
-  }, [])
+    setRecords([])
+    setNotice(null)
+  }, [region.code])
 
   const addRecord = (transaction: CanonicalTransaction, decision: ClassificationDecision) => {
     setRecords((prev) => [{ transaction, decision }, ...prev])
@@ -165,6 +183,7 @@ export default function FilingOrchestratorApp() {
       setNotice({ type: 'error', message: 'レシート画像を選択してください。' })
       return
     }
+
     setIsSubmittingOcr(true)
     setNotice(null)
     try {
@@ -172,14 +191,13 @@ export default function FilingOrchestratorApp() {
       const response = await fetch('/api/intake/ocr-classify', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ imageDataUrl, country_code: 'JP' }),
+        body: JSON.stringify({ imageDataUrl, country_code: region.countryCode }),
       })
       const data = (await response.json()) as {
         ok?: boolean
         transaction?: CanonicalTransaction
         decision?: ClassificationDecision
         diagnostic_code?: string
-        message?: string
       }
       if (!response.ok || !data.ok || !data.transaction || !data.decision) {
         setNotice({ type: 'error', message: `OCR取込に失敗しました (${data.diagnostic_code ?? response.status})` })
@@ -216,7 +234,7 @@ export default function FilingOrchestratorApp() {
           counterparty: manualCounterparty,
           direction: 'expense',
           source_type: 'manual',
-          country_code: 'JP',
+          country_code: region.countryCode,
         }),
       })
 
@@ -248,13 +266,7 @@ export default function FilingOrchestratorApp() {
     setRecords((prev) =>
       prev.map((record) =>
         record.transaction.transaction_id === transactionId
-          ? {
-              ...record,
-              decision: {
-                ...record.decision,
-                ...patch,
-              },
-            }
+          ? { ...record, decision: { ...record.decision, ...patch } }
           : record
       )
     )
@@ -285,6 +297,11 @@ export default function FilingOrchestratorApp() {
   }
 
   const postDrafts = async () => {
+    if (!isFreeePrimaryRegion) {
+      setNotice({ type: 'error', message: 'この地域の会計連携は準備中です。JPでfreee送信できます。' })
+      return
+    }
+
     if (postableCommands.length === 0) {
       setNotice({ type: 'error', message: 'freee送信対象（OK）がありません。' })
       return
@@ -333,29 +350,41 @@ export default function FilingOrchestratorApp() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-100">
-      <div className="mx-auto w-full max-w-6xl p-4">
-        <header className="sticky top-0 z-10 rounded-2xl border border-slate-200 bg-white/95 p-4 shadow-sm backdrop-blur">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h1 className="text-2xl font-black text-slate-900">Tax man</h1>
-              <p className="text-sm text-slate-500">店主入力を最小化し、税理士の最終チェックに集中する運用</p>
+    <div className="min-h-screen bg-[radial-gradient(circle_at_0%_0%,#f8fafc_0%,#eef2ff_45%,#e2e8f0_100%)]">
+      <div className="mx-auto w-full max-w-6xl p-4 md:p-6">
+        <header className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-xl">
+          <div
+            className="px-5 py-6 text-white md:px-8"
+            style={{ backgroundImage: `linear-gradient(135deg, ${region.accentFrom} 0%, ${region.accentTo} 100%)` }}
+          >
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-white/80">Tax man</p>
+                <h1 className="mt-1 text-3xl font-black">{region.uxLabel}</h1>
+                <p className="mt-2 text-sm text-white/90">{region.description}</p>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={onSwitchRegion}
+                  className="rounded-xl border border-white/35 bg-white/10 px-3 py-2 text-sm font-semibold text-white hover:bg-white/20"
+                >
+                  地域を変更
+                </button>
+                <button
+                  onClick={() => void signOut()}
+                  className="rounded-xl border border-white/35 bg-white/10 px-3 py-2 text-sm font-semibold text-white hover:bg-white/20"
+                >
+                  ログアウト
+                </button>
+              </div>
             </div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-slate-500">{user?.primaryEmailAddress?.emailAddress ?? ''}</span>
-              <button
-                onClick={() => void signOut()}
-                className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold"
-              >
-                ログアウト
-              </button>
-            </div>
+            <p className="mt-3 text-xs text-white/80">{user?.primaryEmailAddress?.emailAddress ?? ''}</p>
           </div>
 
-          <div className="mt-3 flex flex-wrap gap-2">
+          <div className="flex flex-wrap items-center gap-2 border-t border-slate-200 px-5 py-3 md:px-8">
             <button
               onClick={() => setTab('transactions')}
-              className={`rounded-lg px-4 py-2 text-sm font-bold ${
+              className={`rounded-xl px-4 py-2 text-sm font-bold ${
                 tab === 'transactions'
                   ? 'bg-slate-900 text-white'
                   : 'border border-slate-300 bg-white text-slate-700'
@@ -365,7 +394,7 @@ export default function FilingOrchestratorApp() {
             </button>
             <button
               onClick={() => setTab('queue')}
-              className={`rounded-lg px-4 py-2 text-sm font-bold ${
+              className={`rounded-xl px-4 py-2 text-sm font-bold ${
                 tab === 'queue' ? 'bg-slate-900 text-white' : 'border border-slate-300 bg-white text-slate-700'
               }`}
             >
@@ -374,15 +403,18 @@ export default function FilingOrchestratorApp() {
             <button
               onClick={() => void refreshStatus()}
               disabled={isLoadingStatus}
-              className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold disabled:bg-slate-100"
+              className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold disabled:bg-slate-100"
             >
               {isLoadingStatus ? '更新中...' : '状態更新'}
             </button>
+            <span className="ml-auto rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
+              {region.code} / {region.currency}
+            </span>
           </div>
 
           {notice && (
             <div
-              className={`mt-3 rounded-lg border px-3 py-2 text-sm ${
+              className={`mx-5 mb-4 rounded-xl border px-3 py-2 text-sm md:mx-8 ${
                 notice.type === 'success'
                   ? 'border-emerald-300 bg-emerald-50 text-emerald-800'
                   : 'border-red-300 bg-red-50 text-red-800'
@@ -394,33 +426,37 @@ export default function FilingOrchestratorApp() {
         </header>
 
         {tab === 'transactions' && (
-          <section className="mt-4 grid gap-4 xl:grid-cols-[1.3fr_1fr]">
+          <section className="mt-4 grid gap-4 xl:grid-cols-[1.35fr_1fr]">
             <div className="space-y-4">
-              <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+              <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                <h2 className="text-lg font-bold text-slate-900">OCR取込</h2>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => {
-                        window.location.href = '/api/freee/oauth/start'
-                      }}
-                      className="rounded-lg bg-blue-600 px-3 py-2 text-sm font-bold text-white"
-                    >
-                    freee連携
-                    </button>
-                    <button
-                      onClick={() => {
-                        window.location.href = '/api/freee/disconnect'
-                      }}
-                      className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold"
-                    >
-                    連携解除
-                    </button>
-                  </div>
+                  <h2 className="text-lg font-bold text-slate-900">OCR取込</h2>
+                  {isFreeePrimaryRegion ? (
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => {
+                          window.location.href = '/api/freee/oauth/start'
+                        }}
+                        className="rounded-lg bg-blue-600 px-3 py-2 text-sm font-bold text-white"
+                      >
+                        freee連携
+                      </button>
+                      <button
+                        onClick={() => {
+                          window.location.href = '/api/freee/disconnect'
+                        }}
+                        className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold"
+                      >
+                        連携解除
+                      </button>
+                    </div>
+                  ) : (
+                    <span className="rounded-full bg-amber-100 px-2 py-1 text-xs font-semibold text-amber-800">
+                      この地域の会計連携は準備中
+                    </span>
+                  )}
                 </div>
-                <p className="mt-1 text-sm text-slate-600">
-                  証憑は処理のためだけに使用し、サーバーには永続保存しません（非保持優先）。
-                </p>
+                <p className="mt-1 text-sm text-slate-600">証憑は処理のためだけに使用し、サーバーには永続保存しません。</p>
                 <div className="mt-3 flex flex-wrap items-center gap-2">
                   <input
                     type="file"
@@ -439,9 +475,9 @@ export default function FilingOrchestratorApp() {
                 </div>
               </div>
 
-              <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+              <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
                 <h2 className="text-lg font-bold text-slate-900">手入力取込</h2>
-                <p className="mt-1 text-sm text-slate-600">紙導入でも使える最小入力です。保存先はfreee下書きです。</p>
+                <p className="mt-1 text-sm text-slate-600">紙導入でも使える最小入力です。取込直後に判定します。</p>
 
                 <form onSubmit={handleManualIntake} className="mt-3 grid gap-3 md:grid-cols-2">
                   <input
@@ -485,7 +521,7 @@ export default function FilingOrchestratorApp() {
                 </form>
               </div>
 
-              <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+              <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
                 <h2 className="text-lg font-bold text-slate-900">今回の取込結果</h2>
                 <div className="mt-3 grid gap-2 sm:grid-cols-4">
                   <div className="rounded-lg bg-slate-50 p-3 text-sm">
@@ -509,7 +545,27 @@ export default function FilingOrchestratorApp() {
             </div>
 
             <aside className="space-y-4">
-              <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+              <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                <h3 className="text-base font-bold text-slate-900">地域プラットフォーム</h3>
+                <div className="mt-3 grid gap-2">
+                  {(status?.region?.platforms ?? region.platforms).map((platform) => (
+                    <div key={platform.key} className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2 text-sm">
+                      <span className="font-semibold text-slate-800">{platform.name}</span>
+                      <span
+                        className={`rounded-full px-2 py-1 text-[11px] font-semibold ${
+                          platform.status === 'ready'
+                            ? 'bg-emerald-100 text-emerald-700'
+                            : 'bg-amber-100 text-amber-800'
+                        }`}
+                      >
+                        {platform.status === 'ready' ? 'Ready' : 'Planned'}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
                 <h3 className="text-base font-bold text-slate-900">連携状態</h3>
                 <div className="mt-2 space-y-2 text-sm">
                   <div className="flex justify-between rounded-md bg-slate-50 px-3 py-2">
@@ -525,10 +581,6 @@ export default function FilingOrchestratorApp() {
                     </span>
                   </div>
                   <div className="flex justify-between rounded-md bg-slate-50 px-3 py-2">
-                    <span>モデル</span>
-                    <span className="font-semibold text-slate-700">{status?.llm.model ?? '-'}</span>
-                  </div>
-                  <div className="flex justify-between rounded-md bg-slate-50 px-3 py-2">
                     <span>接続方式</span>
                     <span className="font-semibold text-slate-700">
                       {status?.freee.mode === 'shared_token' ? '共通トークン' : 'ユーザーOAuth'}
@@ -536,39 +588,31 @@ export default function FilingOrchestratorApp() {
                   </div>
                 </div>
               </div>
-
-              <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-                <h3 className="text-base font-bold text-slate-900">注意</h3>
-                <p className="mt-2 text-xs text-slate-600">
-                  税務判断の最終責任は専門家にあります。サービスは判定補助と下書き作成を提供します。
-                </p>
-                <p className="mt-2 text-xs text-slate-600">
-                  問い合わせ境界: 接続/判定パイプラインは当方、会計仕様/仕訳仕様はfreeeサポート。
-                </p>
-              </div>
             </aside>
           </section>
         )}
 
         {tab === 'queue' && (
           <section className="mt-4 space-y-4">
-            <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <h2 className="text-lg font-bold text-slate-900">判定キュー</h2>
                 <div className="flex gap-2">
-                  <button
-                    onClick={() => void refreshFreeeQueue()}
-                    disabled={isLoadingQueue}
-                    className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold disabled:bg-slate-100"
-                  >
-                    {isLoadingQueue ? '取得中...' : 'freee下書きを取得'}
-                  </button>
+                  {isFreeePrimaryRegion && (
+                    <button
+                      onClick={() => void refreshFreeeQueue()}
+                      disabled={isLoadingQueue}
+                      className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold disabled:bg-slate-100"
+                    >
+                      {isLoadingQueue ? '取得中...' : 'freee下書きを取得'}
+                    </button>
+                  )}
                   <button
                     onClick={postDrafts}
                     disabled={isPostingDraft || postableCommands.length === 0}
                     className="rounded-lg bg-emerald-600 px-3 py-2 text-sm font-bold text-white disabled:bg-slate-400"
                   >
-                    {isPostingDraft ? '送信中...' : `OKをfreee下書き送信 (${postableCommands.length})`}
+                    {isPostingDraft ? '送信中...' : `OKを会計下書き送信 (${postableCommands.length})`}
                   </button>
                 </div>
               </div>
@@ -581,7 +625,7 @@ export default function FilingOrchestratorApp() {
                     <div key={record.transaction.transaction_id} className="rounded-xl border border-slate-200 p-3">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <p className="text-sm font-semibold text-slate-900">
-                          {record.transaction.occurred_at} / {formatYen(record.transaction.amount)} / {record.transaction.memo_redacted}
+                          {record.transaction.occurred_at} / {formatMoney(record.transaction.amount, region.currency)} / {record.transaction.memo_redacted}
                         </p>
                         <span
                           className={`rounded-full px-2 py-1 text-xs font-bold ${
@@ -652,7 +696,7 @@ export default function FilingOrchestratorApp() {
                       {record.posted ? (
                         <p className={`mt-2 text-xs ${record.posted.ok ? 'text-emerald-700' : 'text-red-700'}`}>
                           {record.posted.ok
-                            ? `freee送信済み (deal: ${record.posted.freee_deal_id ?? '-'})`
+                            ? `送信済み (deal: ${record.posted.freee_deal_id ?? '-'})`
                             : `送信失敗 (${record.posted.diagnostic_code})`}
                         </p>
                       ) : null}
@@ -662,40 +706,46 @@ export default function FilingOrchestratorApp() {
               </div>
             </div>
 
-            <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-                <h3 className="text-base font-bold text-slate-900">freeeレビューキュー</h3>
-              <div className="mt-3 max-h-72 overflow-y-auto rounded-lg border border-slate-200">
-                <table className="w-full text-sm">
-                  <thead className="sticky top-0 bg-slate-50">
-                    <tr>
-                      <th className="p-2 text-left">ID</th>
-                      <th className="p-2 text-left">日付</th>
-                      <th className="p-2 text-right">金額</th>
-                      <th className="p-2 text-left">状態</th>
-                      <th className="p-2 text-left">メモ</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {freeeQueue.length === 0 ? (
+            <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <h3 className="text-base font-bold text-slate-900">会計下書きキュー</h3>
+              {!isFreeePrimaryRegion ? (
+                <p className="mt-2 rounded-lg bg-slate-50 p-3 text-sm text-slate-600">
+                  {region.name} の会計コネクタは planned。今は判定キューまで運用し、接続後に下書き送信できます。
+                </p>
+              ) : (
+                <div className="mt-3 max-h-72 overflow-y-auto rounded-lg border border-slate-200">
+                  <table className="w-full text-sm">
+                    <thead className="sticky top-0 bg-slate-50">
                       <tr>
-                        <td colSpan={5} className="p-3 text-center text-slate-500">
-                          freeeレビューキューがありません。
-                        </td>
+                        <th className="p-2 text-left">ID</th>
+                        <th className="p-2 text-left">日付</th>
+                        <th className="p-2 text-right">金額</th>
+                        <th className="p-2 text-left">状態</th>
+                        <th className="p-2 text-left">メモ</th>
                       </tr>
-                    ) : (
-                      freeeQueue.map((row, index) => (
-                        <tr key={`${row.id ?? 'n'}-${index}`} className="border-t border-slate-100">
-                          <td className="p-2">{row.id ?? '-'}</td>
-                          <td className="p-2">{row.issue_date || '-'}</td>
-                          <td className="p-2 text-right">{formatYen(row.amount)}</td>
-                          <td className="p-2">{row.status || '-'}</td>
-                          <td className="p-2">{row.memo || '-'}</td>
+                    </thead>
+                    <tbody>
+                      {freeeQueue.length === 0 ? (
+                        <tr>
+                          <td colSpan={5} className="p-3 text-center text-slate-500">
+                            freeeレビューキューがありません。
+                          </td>
                         </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
-              </div>
+                      ) : (
+                        freeeQueue.map((row, index) => (
+                          <tr key={`${row.id ?? 'n'}-${index}`} className="border-t border-slate-100">
+                            <td className="p-2">{row.id ?? '-'}</td>
+                            <td className="p-2">{row.issue_date || '-'}</td>
+                            <td className="p-2 text-right">{formatMoney(row.amount, region.currency)}</td>
+                            <td className="p-2">{row.status || '-'}</td>
+                            <td className="p-2">{row.memo || '-'}</td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           </section>
         )}

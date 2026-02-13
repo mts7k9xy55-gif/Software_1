@@ -1,12 +1,33 @@
 'use client'
 
+import { useEffect, useMemo, useState } from 'react'
 import { useUser } from '@clerk/nextjs'
 import FilingOrchestratorApp from '@/components/FilingOrchestratorApp'
 import LoginForm from '@/components/LoginForm'
+import DoorPage from '@/components/DoorPage'
+import { DEFAULT_REGION_CODE, getRegionDefinition, isRegionCode, type RegionCode } from '@/lib/core/regions'
+
+const REGION_STORAGE_KEY = 'taxman:selected_region'
 
 export default function Home() {
   const { user, isLoaded } = useUser()
+  const [selectedRegion, setSelectedRegion] = useState<RegionCode>(DEFAULT_REGION_CODE)
+  const [entered, setEntered] = useState(false)
   const loading = !isLoaded
+  const region = useMemo(() => getRegionDefinition(selectedRegion), [selectedRegion])
+
+  useEffect(() => {
+    if (!user) return
+    const saved = window.localStorage.getItem(REGION_STORAGE_KEY)
+    if (saved && isRegionCode(saved)) {
+      setSelectedRegion(saved)
+    }
+  }, [user])
+
+  useEffect(() => {
+    if (!user) return
+    window.localStorage.setItem(REGION_STORAGE_KEY, selectedRegion)
+  }, [selectedRegion, user])
 
   if (loading) {
     return (
@@ -23,5 +44,15 @@ export default function Home() {
     return <LoginForm />
   }
 
-  return <FilingOrchestratorApp />
+  if (!entered) {
+    return (
+      <DoorPage
+        selectedRegion={selectedRegion}
+        onSelectRegion={setSelectedRegion}
+        onEnter={() => setEntered(true)}
+      />
+    )
+  }
+
+  return <FilingOrchestratorApp region={region} onSwitchRegion={() => setEntered(false)} />
 }

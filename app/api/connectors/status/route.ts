@@ -4,12 +4,15 @@ import { auth } from '@clerk/nextjs/server'
 
 import { getEnabledPacks } from '@/lib/core/packs'
 import { readFreeeSession } from '@/lib/connectors/freee'
+import { getRegionDefinition } from '@/lib/core/regions'
 
-export async function GET() {
+export async function GET(request: Request) {
   const { userId } = auth()
   if (!userId) return NextResponse.json({ ok: false, diagnostic_code: 'AUTH_REQUIRED' }, { status: 401 })
 
   const session = readFreeeSession(cookies())
+  const url = new URL(request.url)
+  const region = getRegionDefinition(url.searchParams.get('region'))
 
   const freeeConfigured = Boolean(
     process.env.NEXT_PUBLIC_FREEE_CLIENT_ID &&
@@ -37,6 +40,13 @@ export async function GET() {
     support_boundary: {
       owner_scope: 'oauth_connectivity_and_classification_pipeline',
       freee_scope: 'accounting_rules_and_freee_internal_processing',
+    },
+    region: {
+      code: region.code,
+      name: region.name,
+      countryCode: region.countryCode,
+      uxLabel: region.uxLabel,
+      platforms: region.platforms,
     },
   }
 

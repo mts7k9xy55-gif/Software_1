@@ -7,10 +7,12 @@ Global filing automation app focused on:
 - Accountant-first review queue
 - freee draft posting
 
-The default UX is now a two-screen shell:
+The default UX is now:
 
-1. `All Transactions`
-2. `Decision Queue`
+1. `Region Door` (region selection)
+2. Two-screen regional shell:
+   - `All Transactions`
+   - `Decision Queue`
 
 Legacy POS/tax views remain in the repo but are not the default home flow.
 
@@ -74,6 +76,7 @@ npm run dev
 - `lib/core/types.ts`: canonical types (`CanonicalTransaction`, `ClassificationDecision`, etc.)
 - `lib/core/decision.ts`: rule-first + LLM supplement + confidence gate
 - `lib/core/jurisdiction.ts`: country profile plugin contract (JP default)
+- `lib/core/regions.ts`: region door + platform routing map
 - `lib/core/packs.ts`: business-pack extension model
 - `lib/connectors/freee.ts`: OAuth token refresh + posting/list adapters
 - `lib/connectors/ocr/gemini.ts`: receipt OCR extractor
