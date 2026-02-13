@@ -156,6 +156,18 @@ interface TaxClassifyApiResponse {
   message?: string
 }
 
+interface TaxOcrApiResponse {
+  ok: boolean
+  expense?: {
+    expense_date: string
+    amount: number
+    description: string
+    merchant?: string
+  }
+  message?: string
+  error?: string
+}
+
 function formatFreeeTaxLabel(tax: FreeeTax): string {
   const ja = String(tax.name_ja ?? '').trim()
   if (ja) return ja
@@ -299,6 +311,79 @@ function formatDate(dateString: string): string {
 
 function escapeCsv(value: string): string {
   return `"${value.replaceAll('"', '""')}"`
+}
+
+function parseCsvRows(content: string): string[][] {
+  const rows: string[][] = []
+  let row: string[] = []
+  let cell = ''
+  let inQuotes = false
+
+  for (let i = 0; i < content.length; i += 1) {
+    const ch = content[i]
+    const next = content[i + 1]
+
+    if (ch === '"') {
+      if (inQuotes && next === '"') {
+        cell += '"'
+        i += 1
+      } else {
+        inQuotes = !inQuotes
+      }
+      continue
+    }
+
+    if (ch === ',' && !inQuotes) {
+      row.push(cell.trim())
+      cell = ''
+      continue
+    }
+
+    if ((ch === '\n' || ch === '\r') && !inQuotes) {
+      if (ch === '\r' && next === '\n') i += 1
+      row.push(cell.trim())
+      if (row.some((v) => v !== '')) rows.push(row)
+      row = []
+      cell = ''
+      continue
+    }
+
+    cell += ch
+  }
+
+  if (cell.length > 0 || row.length > 0) {
+    row.push(cell.trim())
+    if (row.some((v) => v !== '')) rows.push(row)
+  }
+
+  return rows
+}
+
+function normalizeHeader(raw: string): string {
+  return raw.toLowerCase().replace(/\s+/g, '').replace(/[_\-()（）]/g, '')
+}
+
+function findHeaderIndex(headers: string[], keywords: string[]): number {
+  return headers.findIndex((h) => keywords.some((k) => h.includes(k)))
+}
+
+function parseAmount(value: string): number {
+  const normalized = value.replace(/[¥￥,\s]/g, '')
+  const num = Number(normalized)
+  if (!Number.isFinite(num)) return NaN
+  return Math.floor(num)
+}
+
+function parseDateYmd(value: string): string | null {
+  const text = value.trim()
+  if (!text) return null
+  const normalized = text.replace(/[./年]/g, '-').replace(/月/g, '-').replace(/日/g, '')
+  const date = new Date(normalized)
+  if (Number.isNaN(date.getTime())) return null
+  const yyyy = date.getFullYear()
+  const mm = String(date.getMonth() + 1).padStart(2, '0')
+  const dd = String(date.getDate()).padStart(2, '0')
+  return `${yyyy}-${mm}-${dd}`
 }
 
 function filingItemStatusLabel(status: FilingItemStatus): string {
@@ -493,6 +578,11 @@ export default function POSSystem() {
   const [expenseDescription, setExpenseDescription] = useState('')
   const [expenseReceiptFile, setExpenseReceiptFile] = useState<File | null>(null)
   const [expenseReceiptPreview, setExpenseReceiptPreview] = useState<string | null>(null)
+  const [salesCsvFile, setSalesCsvFile] = useState<File | null>(null)
+  const [expensesCsvFile, setExpensesCsvFile] = useState<File | null>(null)
+  const [isImportingSalesCsv, setIsImportingSalesCsv] = useState(false)
+  const [isImportingExpensesCsv, setIsImportingExpensesCsv] = useState(false)
+  const [isReceiptOcrRunning, setIsReceiptOcrRunning] = useState(false)
 
   const [inventoryYear, setInventoryYear] = useState<string>(() => String(new Date().getFullYear()))
   const [inventoryAmount, setInventoryAmount] = useState('')
@@ -1526,6 +1616,224 @@ export default function POSSystem() {
     } = supabase.storage.from('expense-receipts').getPublicUrl(fileName)
 
     return publicUrl
+  }
+
+  const importSalesCsv = async () => {
+    if (!salesCsvFile || !shopId) {
+      setNotice({ type: 'error', message: '売上CSVファイルを選択してください。' })
+      return
+    }
+
+    const ensuredShopId = await ensureShopRecord()
+    if (!ensuredShopId) return
+
+    setIsImportingSalesCsv(true)
+    setNotice(null)
+
+    try {
+      const text = await salesCsvFile.text()
+      const rows = parseCsvRows(text)
+      if (rows.length < 2) {
+        setNotice({ type: 'error', message: '売上CSVに有効なデータ行がありません。' })
+        return
+      }
+
+      const headers = rows[0].map(normalizeHeader)
+      const amountIdx = findHeaderIndex(headers, ['税込売上', 'totalamount', 'amount', '売上'])
+      const dateIdx = findHeaderIndex(headers, ['日時', '日付', 'createdat', 'date'])
+      const taxRateIdx = findHeaderIndex(headers, ['税率', 'taxrate', 'rate'])
+      const itemIdx = findHeaderIndex(headers, ['商品明細', '商品', 'items', 'item'])
+
+      if (amountIdx < 0 || dateIdx < 0) {
+        setNotice({ type: 'error', message: '売上CSVの列を認識できません。必須: 日付/日時, 金額。' })
+        return
+      }
+
+      const payload = rows.slice(1).flatMap((row) => {
+        const amount = parseAmount(row[amountIdx] ?? '')
+        const date = parseDateYmd(row[dateIdx] ?? '')
+        if (!Number.isFinite(amount) || amount <= 0 || !date) return []
+        const rateRaw = Number((row[taxRateIdx] ?? '10').replace('%', '').trim())
+        const taxRate = normalizeTaxRate(Number.isFinite(rateRaw) ? rateRaw : 10)
+        const subtotal = Math.floor((amount * 100) / (100 + taxRate))
+        const taxAmount = amount - subtotal
+        const itemName = (row[itemIdx] ?? '').trim() || '売上取込'
+        const items: SaleItem[] = [{ id: 0, name: itemName, price: subtotal, quantity: 1, tax_rate: taxRate }]
+        return [
+          {
+            shop_id: ensuredShopId,
+            items,
+            total_amount: amount,
+            created_at: `${date}T12:00:00`,
+            tax_details: [
+              {
+                tax_rate: taxRate,
+                subtotal,
+                tax_amount: taxAmount,
+                total: amount,
+              },
+            ],
+          },
+        ]
+      })
+
+      if (payload.length === 0) {
+        setNotice({ type: 'error', message: '売上CSVから取り込める行がありませんでした。' })
+        return
+      }
+
+      let { error } = await supabase.from('sales').insert(payload)
+      if (isInvalidUuidError(error) && uuidShopId) {
+        const retry = await supabase.from('sales').insert(payload.map((row) => ({ ...row, shop_id: uuidShopId })))
+        error = retry.error
+      }
+      if (error && (isMissingColumnError(error, 'shop_id') || isMissingColumnError(error, 'tax_details'))) {
+        const legacyRows = payload.map((row) => ({
+          shop_id: row.shop_id,
+          items: row.items,
+          total_amount: row.total_amount,
+          created_at: row.created_at,
+        }))
+        const retry = await supabase.from('sales').insert(legacyRows)
+        error = retry.error
+      }
+
+      if (error) {
+        setNotice({ type: 'error', message: `売上CSV取込に失敗しました: ${error.message}` })
+        return
+      }
+
+      setSalesCsvFile(null)
+      await fetchTodaySales()
+      await fetchPeriodSales()
+      setNotice({ type: 'success', message: `売上CSVを ${payload.length} 件取り込みました。` })
+    } finally {
+      setIsImportingSalesCsv(false)
+    }
+  }
+
+  const importExpensesCsv = async () => {
+    if (!expensesCsvFile || !shopId) {
+      setNotice({ type: 'error', message: '経費CSVファイルを選択してください。' })
+      return
+    }
+
+    const ensuredShopId = await ensureShopRecord()
+    if (!ensuredShopId) return
+
+    setIsImportingExpensesCsv(true)
+    setNotice(null)
+
+    try {
+      const text = await expensesCsvFile.text()
+      const rows = parseCsvRows(text)
+      if (rows.length < 2) {
+        setNotice({ type: 'error', message: '経費CSVに有効なデータ行がありません。' })
+        return
+      }
+
+      const headers = rows[0].map(normalizeHeader)
+      const amountIdx = findHeaderIndex(headers, ['金額', 'amount'])
+      const dateIdx = findHeaderIndex(headers, ['日付', 'date'])
+      const descIdx = findHeaderIndex(headers, ['内容', '摘要', 'description', 'item', '取引先'])
+      const receiptIdx = findHeaderIndex(headers, ['レシートurl', 'receipturl', 'receipt'])
+
+      if (amountIdx < 0 || dateIdx < 0 || descIdx < 0) {
+        setNotice({ type: 'error', message: '経費CSVの列を認識できません。必須: 日付, 金額, 内容。' })
+        return
+      }
+
+      const payload = rows.slice(1).flatMap((row) => {
+        const amount = parseAmount(row[amountIdx] ?? '')
+        const date = parseDateYmd(row[dateIdx] ?? '')
+        const description = String(row[descIdx] ?? '').trim()
+        const receiptUrlRaw = String(row[receiptIdx] ?? '').trim()
+        const receiptUrl = receiptUrlRaw || null
+        if (!date || !description || !Number.isFinite(amount) || amount <= 0) return []
+        return [
+          {
+            shop_id: ensuredShopId,
+            expense_date: date,
+            amount,
+            description,
+            receipt_url: receiptUrl,
+          },
+        ]
+      })
+
+      if (payload.length === 0) {
+        setNotice({ type: 'error', message: '経費CSVから取り込める行がありませんでした。' })
+        return
+      }
+
+      const { error } = await supabase.from('expenses').insert(payload)
+      if (error) {
+        if (isMissingTableError(error)) {
+          setNotice({
+            type: 'error',
+            message: '経費帳テーブルが未作成です。Supabaseに expenses を作成してください。',
+          })
+          return
+        }
+        setNotice({ type: 'error', message: `経費CSV取込に失敗しました: ${error.message}` })
+        return
+      }
+
+      setExpensesCsvFile(null)
+      await fetchPeriodExpenses()
+      setNotice({ type: 'success', message: `経費CSVを ${payload.length} 件取り込みました。` })
+    } finally {
+      setIsImportingExpensesCsv(false)
+    }
+  }
+
+  const applyExpenseFromReceiptImage = async () => {
+    if (!expenseReceiptFile) {
+      setNotice({ type: 'error', message: '先にレシート画像を選択してください。' })
+      return
+    }
+
+    setIsReceiptOcrRunning(true)
+    setNotice(null)
+    try {
+      const toDataUrl = (file: File) =>
+        new Promise<string>((resolve, reject) => {
+          const reader = new FileReader()
+          reader.onload = () => {
+            if (typeof reader.result === 'string') resolve(reader.result)
+            else reject(new Error('failed to read image'))
+          }
+          reader.onerror = () => reject(new Error('failed to read image'))
+          reader.readAsDataURL(file)
+        })
+
+      const dataUrl = await toDataUrl(expenseReceiptFile)
+      const response = await fetch('/api/tax/ocr-receipt', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ imageDataUrl: dataUrl }),
+      })
+      const data = (await response.json()) as TaxOcrApiResponse
+      if (!response.ok || !data.ok || !data.expense) {
+        setNotice({
+          type: 'error',
+          message: data.error ?? data.message ?? '画像からの抽出に失敗しました。',
+        })
+        return
+      }
+
+      setExpenseDate(data.expense.expense_date)
+      setExpenseAmount(String(data.expense.amount))
+      setExpenseDescription(data.expense.description)
+      setNotice({ type: 'success', message: data.message ?? '画像から経費候補を入力しました。' })
+    } catch (error) {
+      setNotice({
+        type: 'error',
+        message: `画像からの抽出に失敗しました: ${error instanceof Error ? error.message : 'unknown'}`,
+      })
+    } finally {
+      setIsReceiptOcrRunning(false)
+    }
   }
 
   const handleExpenseSubmit = async (event: React.FormEvent) => {
@@ -2953,6 +3261,49 @@ export default function POSSystem() {
                   日付・金額・内容・レシート写真だけ記録します（期間内データを表示）。
                 </p>
 
+                <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                  <h4 className="text-sm font-bold text-slate-900">初回データ取込（既存データ）</h4>
+                  <p className="mt-1 text-xs text-slate-600">
+                    既存の売上・経費CSVをここで一括投入できます。初回導入時に使ってください。
+                  </p>
+                  <div className="mt-3 grid gap-3 md:grid-cols-2">
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold text-slate-700">売上CSV</label>
+                      <input
+                        type="file"
+                        accept=".csv,text/csv"
+                        onChange={(event) => setSalesCsvFile(event.target.files?.[0] ?? null)}
+                        className="w-full rounded-lg border border-slate-300 bg-white p-2 text-xs"
+                      />
+                      <button
+                        type="button"
+                        onClick={importSalesCsv}
+                        disabled={isImportingSalesCsv || !salesCsvFile}
+                        className="mt-2 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold disabled:bg-slate-100 disabled:text-slate-400"
+                      >
+                        {isImportingSalesCsv ? '取込中...' : '売上CSVを取込'}
+                      </button>
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold text-slate-700">経費CSV</label>
+                      <input
+                        type="file"
+                        accept=".csv,text/csv"
+                        onChange={(event) => setExpensesCsvFile(event.target.files?.[0] ?? null)}
+                        className="w-full rounded-lg border border-slate-300 bg-white p-2 text-xs"
+                      />
+                      <button
+                        type="button"
+                        onClick={importExpensesCsv}
+                        disabled={isImportingExpensesCsv || !expensesCsvFile}
+                        className="mt-2 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold disabled:bg-slate-100 disabled:text-slate-400"
+                      >
+                        {isImportingExpensesCsv ? '取込中...' : '経費CSVを取込'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
                 <form onSubmit={handleExpenseSubmit} className="mt-4 grid gap-3 md:grid-cols-2">
                   <div>
                     <label className="mb-1 block text-sm font-semibold">日付</label>
@@ -2997,11 +3348,21 @@ export default function POSSystem() {
                       className="w-full rounded-lg border border-slate-300 bg-white p-2"
                     />
                     {expenseReceiptPreview && (
-                      <img
-                        src={expenseReceiptPreview}
-                        alt="レシートプレビュー"
-                        className="mt-2 h-24 w-24 rounded-lg border border-slate-300 object-cover"
-                      />
+                      <div className="mt-2 flex items-center gap-3">
+                        <img
+                          src={expenseReceiptPreview}
+                          alt="レシートプレビュー"
+                          className="h-24 w-24 rounded-lg border border-slate-300 object-cover"
+                        />
+                        <button
+                          type="button"
+                          onClick={applyExpenseFromReceiptImage}
+                          disabled={isReceiptOcrRunning}
+                          className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold disabled:bg-slate-100 disabled:text-slate-400"
+                        >
+                          {isReceiptOcrRunning ? '抽出中...' : '画像から内容を自動入力'}
+                        </button>
+                      </div>
                     )}
                   </div>
                   <div className="md:col-span-2">

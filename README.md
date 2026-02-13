@@ -76,6 +76,8 @@ npm run dev
 - ✅ Shadcn/uiのコンポーネントを使用
 - ✅ 税務モードのワンタップ申告パック出力（CSV/JSON/README）
 - ✅ 申告準備度チェック（BLOCKER/REVIEW/READY）と税理士向け引き継ぎメモ
+- ✅ 既存データの初回取込（売上CSV/経費CSV）
+- ✅ レシート画像OCR（Gemini）から経費フォームの自動入力
 
 ## 設計ドキュメント
 
