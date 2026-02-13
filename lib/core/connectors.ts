@@ -1,4 +1,11 @@
-import type { CanonicalTransaction, PostingCommand, PostingResult } from './types'
+import type {
+  AccountingProvider,
+  CanonicalTransaction,
+  PostingCommand,
+  ProviderDraftResult,
+  ReviewQueueItem,
+  TenantContext,
+} from './types'
 
 export interface SourceConnector {
   key: string
@@ -11,5 +18,13 @@ export interface SinkConnector {
   key: string
   title: string
   countryCodes: string[]
-  postDrafts: (commands: PostingCommand[]) => Promise<PostingResult[]>
+  postDrafts: (args: {
+    commands: PostingCommand[]
+    tenant: TenantContext
+  }) => Promise<ProviderDraftResult[]>
+  fetchReviewQueue: (args: { tenant: TenantContext; limit?: number }) => Promise<ReviewQueueItem[]>
+}
+
+export interface ConnectorRouter {
+  resolveProvider: (regionCode: string, requestedProvider?: AccountingProvider) => AccountingProvider
 }

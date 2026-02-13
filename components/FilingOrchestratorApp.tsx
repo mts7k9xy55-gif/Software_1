@@ -3,7 +3,16 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useClerk, useUser } from '@clerk/nextjs'
 
-import type { CanonicalTransaction, ClassificationDecision, PostingCommand, PostingResult } from '@/lib/core/types'
+import type {
+  AccountingProvider,
+  CanonicalTransaction,
+  ClassificationDecision,
+  OperationMode,
+  PostingCommand,
+  PostingResult,
+  ReviewQueueItem,
+  TenantContext,
+} from '@/lib/core/types'
 import type { RegionDefinition } from '@/lib/core/regions'
 
 type TabKey = 'transactions' | 'queue'
@@ -11,6 +20,9 @@ type TabKey = 'transactions' | 'queue'
 type Notice = {
   type: 'success' | 'error'
   message: string
+  code?: string
+  nextAction?: string
+  contact?: string
 }
 
 type LocalRecord = {
@@ -19,14 +31,23 @@ type LocalRecord = {
   posted?: PostingResult
 }
 
+type ProviderStatus = {
+  provider: AccountingProvider
+  label: string
+  configured: boolean
+  connected: boolean
+  mode: 'shared_token' | 'oauth_per_user'
+  account_context: string | null
+  next_action: string
+  contact: string
+  support_name: string
+  docs_url: string
+}
+
 type ConnectorStatus = {
-  freee: {
-    configured: boolean
-    connected: boolean
-    companyId: number | null
-    nextAction: string
-    mode?: 'shared_token' | 'oauth_per_user'
-  }
+  provider: AccountingProvider
+  provider_status?: ProviderStatus
+  providers: ProviderStatus[]
   ocr: {
     enabled: boolean
     provider: string
@@ -36,9 +57,10 @@ type ConnectorStatus = {
     model: string
   }
   packs: Array<{ key: string; title: string }>
+  tenant: TenantContext
   support_boundary: {
     owner_scope: string
-    freee_scope: string
+    provider_scope: string
   }
   region?: {
     code: string
@@ -49,18 +71,12 @@ type ConnectorStatus = {
   }
 }
 
-type FreeeQueueRow = {
-  id: number | null
-  issue_date: string
-  amount: number
-  status: string
-  memo: string
-}
-
 type FilingOrchestratorAppProps = {
   region: RegionDefinition
   onSwitchRegion: () => void
 }
+
+const MODE_STORAGE_KEY = 'taxman:operation_mode'
 
 function formatMoney(value: number, currency: string): string {
   return new Intl.NumberFormat('en-US', {
@@ -82,18 +98,24 @@ async function fileToDataUrl(file: File): Promise<string> {
   })
 }
 
+function normalizeMode(input: string): OperationMode {
+  return input === 'direct' ? 'direct' : 'tax_pro'
+}
+
 export default function FilingOrchestratorApp({ region, onSwitchRegion }: FilingOrchestratorAppProps) {
   const { user } = useUser()
   const { signOut } = useClerk()
 
   const [tab, setTab] = useState<TabKey>('transactions')
   const [notice, setNotice] = useState<Notice | null>(null)
+  const [showSettings, setShowSettings] = useState(false)
 
+  const [mode, setMode] = useState<OperationMode>('tax_pro')
   const [status, setStatus] = useState<ConnectorStatus | null>(null)
   const [isLoadingStatus, setIsLoadingStatus] = useState(false)
 
   const [records, setRecords] = useState<LocalRecord[]>([])
-  const [freeeQueue, setFreeeQueue] = useState<FreeeQueueRow[]>([])
+  const [reviewQueue, setReviewQueue] = useState<ReviewQueueItem[]>([])
   const [isLoadingQueue, setIsLoadingQueue] = useState(false)
 
   const [receiptFile, setReceiptFile] = useState<File | null>(null)
@@ -106,7 +128,8 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
   const [isSubmittingManual, setIsSubmittingManual] = useState(false)
   const [isPostingDraft, setIsPostingDraft] = useState(false)
 
-  const isFreeePrimaryRegion = region.code === 'JP'
+  const provider = status?.provider ?? 'freee'
+  const activeProviderStatus = status?.provider_status
 
   const postableCommands = useMemo<PostingCommand[]>(() => {
     return records
@@ -121,47 +144,95 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
     return { total: records.length, ok, review, ng }
   }, [records])
 
+  useEffect(() => {
+    const saved = window.localStorage.getItem(MODE_STORAGE_KEY)
+    if (saved) setMode(normalizeMode(saved))
+  }, [])
+
+  useEffect(() => {
+    window.localStorage.setItem(MODE_STORAGE_KEY, mode)
+  }, [mode])
+
+  const showApiNotice = (payload: {
+    message: string
+    diagnostic_code?: string
+    next_action?: string
+    contact?: string
+    type?: 'success' | 'error'
+  }) => {
+    setNotice({
+      type: payload.type ?? 'error',
+      message: payload.message,
+      code: payload.diagnostic_code,
+      nextAction: payload.next_action,
+      contact: payload.contact,
+    })
+  }
+
   const refreshStatus = async () => {
     setIsLoadingStatus(true)
     try {
-      const response = await fetch(`/api/connectors/status?region=${region.code}`, { cache: 'no-store' })
-      const data = (await response.json()) as { ok?: boolean; status?: ConnectorStatus; diagnostic_code?: string }
+      const response = await fetch(`/api/connectors/status?region=${region.code}&mode=${mode}`, { cache: 'no-store' })
+      const data = (await response.json()) as {
+        ok?: boolean
+        status?: ConnectorStatus
+        diagnostic_code?: string
+        next_action?: string
+        contact?: string
+      }
       if (!response.ok || !data.ok || !data.status) {
-        setNotice({ type: 'error', message: `接続状態の取得に失敗しました (${data.diagnostic_code ?? response.status})` })
+        showApiNotice({
+          message: '接続状態の取得に失敗しました。',
+          diagnostic_code: data.diagnostic_code ?? String(response.status),
+          next_action: data.next_action,
+          contact: data.contact,
+        })
         return
       }
       setStatus(data.status)
     } catch (error) {
-      setNotice({
-        type: 'error',
+      showApiNotice({
         message: `接続状態の取得に失敗しました: ${error instanceof Error ? error.message : 'unknown'}`,
+        diagnostic_code: 'CONNECTORS_STATUS_FAILED',
       })
     } finally {
       setIsLoadingStatus(false)
     }
   }
 
-  const refreshFreeeQueue = async () => {
-    if (!isFreeePrimaryRegion) {
-      setFreeeQueue([])
-      return
-    }
-
+  const refreshQueue = async () => {
     setIsLoadingQueue(true)
     try {
-      const response = await fetch('/api/queue/review?limit=30', { cache: 'no-store' })
+      const response = await fetch(
+        `/api/queue/review?limit=30&region=${region.code}&mode=${mode}&provider=${provider}`,
+        { cache: 'no-store' }
+      )
       const data = (await response.json()) as {
         ok?: boolean
-        queue?: FreeeQueueRow[]
+        queue?: ReviewQueueItem[]
         diagnostic_code?: string
+        next_action?: string
+        contact?: string
       }
+
       if (!response.ok || !data.ok || !Array.isArray(data.queue)) {
-        setNotice({ type: 'error', message: `freeeレビュー取得に失敗しました (${data.diagnostic_code ?? response.status})` })
+        showApiNotice({
+          message: 'レビューキュー取得に失敗しました。',
+          diagnostic_code: data.diagnostic_code ?? String(response.status),
+          next_action: data.next_action,
+          contact: data.contact,
+        })
+        setReviewQueue([])
         return
       }
-      setFreeeQueue(data.queue)
+
+      setReviewQueue(data.queue)
     } catch (error) {
-      setNotice({ type: 'error', message: `freeeレビュー取得に失敗しました: ${error instanceof Error ? error.message : 'unknown'}` })
+      showApiNotice({
+        message: `レビューキュー取得に失敗しました: ${error instanceof Error ? error.message : 'unknown'}`,
+        diagnostic_code: 'REVIEW_QUEUE_FAILED',
+      })
+      setReviewQueue([])
     } finally {
       setIsLoadingQueue(false)
     }
@@ -169,10 +240,15 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
 
   useEffect(() => {
     void refreshStatus()
-    void refreshFreeeQueue()
     setRecords([])
+    setReviewQueue([])
     setNotice(null)
-  }, [region.code])
+  }, [region.code, mode])
+
+  useEffect(() => {
+    if (!status) return
+    void refreshQueue()
+  }, [status?.provider])
 
   const addRecord = (transaction: CanonicalTransaction, decision: ClassificationDecision) => {
     setRecords((prev) => [{ transaction, decision }, ...prev])
@@ -180,7 +256,7 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
 
   const handleOcrIntake = async () => {
     if (!receiptFile) {
-      setNotice({ type: 'error', message: 'レシート画像を選択してください。' })
+      showApiNotice({ message: 'レシート画像を選択してください。', diagnostic_code: 'RECEIPT_REQUIRED' })
       return
     }
 
@@ -200,14 +276,21 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
         diagnostic_code?: string
       }
       if (!response.ok || !data.ok || !data.transaction || !data.decision) {
-        setNotice({ type: 'error', message: `OCR取込に失敗しました (${data.diagnostic_code ?? response.status})` })
+        showApiNotice({
+          message: 'OCR取込に失敗しました。',
+          diagnostic_code: data.diagnostic_code ?? String(response.status),
+          next_action: '画像の再撮影または手入力で再試行してください。',
+        })
         return
       }
       addRecord(data.transaction, data.decision)
       setReceiptFile(null)
       setNotice({ type: 'success', message: `OCR取込完了: ${data.decision.rank} / ${data.decision.category}` })
     } catch (error) {
-      setNotice({ type: 'error', message: `OCR取込に失敗しました: ${error instanceof Error ? error.message : 'unknown'}` })
+      showApiNotice({
+        message: `OCR取込に失敗しました: ${error instanceof Error ? error.message : 'unknown'}`,
+        diagnostic_code: 'INTAKE_OCR_FAILED',
+      })
     } finally {
       setIsSubmittingOcr(false)
     }
@@ -217,7 +300,10 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
     event.preventDefault()
     const amount = Number(manualAmount)
     if (!manualDescription.trim() || !Number.isFinite(amount) || amount <= 0) {
-      setNotice({ type: 'error', message: '日付・金額・内容を確認してください。' })
+      showApiNotice({
+        message: '日付・金額・内容を確認してください。',
+        diagnostic_code: 'INVALID_MANUAL_INPUT',
+      })
       return
     }
 
@@ -246,7 +332,11 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
       }
 
       if (!response.ok || !data.ok || !data.transaction || !data.decision) {
-        setNotice({ type: 'error', message: `手入力取込に失敗しました (${data.diagnostic_code ?? response.status})` })
+        showApiNotice({
+          message: '手入力取込に失敗しました。',
+          diagnostic_code: data.diagnostic_code ?? String(response.status),
+          next_action: '入力項目を見直して再試行してください。',
+        })
         return
       }
 
@@ -256,7 +346,10 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
       setManualCounterparty('')
       setNotice({ type: 'success', message: `手入力取込完了: ${data.decision.rank} / ${data.decision.category}` })
     } catch (error) {
-      setNotice({ type: 'error', message: `手入力取込に失敗しました: ${error instanceof Error ? error.message : 'unknown'}` })
+      showApiNotice({
+        message: `手入力取込に失敗しました: ${error instanceof Error ? error.message : 'unknown'}`,
+        diagnostic_code: 'INTAKE_MANUAL_FAILED',
+      })
     } finally {
       setIsSubmittingManual(false)
     }
@@ -286,34 +379,94 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
         diagnostic_code?: string
       }
       if (!response.ok || !data.ok || !data.decision) {
-        setNotice({ type: 'error', message: `再判定に失敗しました (${data.diagnostic_code ?? response.status})` })
+        showApiNotice({
+          message: '再判定に失敗しました。',
+          diagnostic_code: data.diagnostic_code ?? String(response.status),
+          next_action: '判定理由を編集して再送信してください。',
+        })
         return
       }
       updateDecision(transaction.transaction_id, data.decision)
       setNotice({ type: 'success', message: '再判定を反映しました。' })
     } catch (error) {
-      setNotice({ type: 'error', message: `再判定に失敗しました: ${error instanceof Error ? error.message : 'unknown'}` })
+      showApiNotice({
+        message: `再判定に失敗しました: ${error instanceof Error ? error.message : 'unknown'}`,
+        diagnostic_code: 'DECISION_EVALUATE_FAILED',
+      })
+    }
+  }
+
+  const startProviderConnect = () => {
+    const query = new URLSearchParams({
+      region: region.code,
+      mode,
+      provider,
+      return_to: `${window.location.pathname}?region=${region.code}`,
+    })
+    window.location.href = `/api/connectors/oauth/start?${query.toString()}`
+  }
+
+  const disconnectProvider = async () => {
+    try {
+      const response = await fetch('/api/connectors/disconnect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider, region: region.code, return_to: '/' }),
+      })
+      const data = (await response.json()) as {
+        ok?: boolean
+        redirect_to?: string
+        diagnostic_code?: string
+        next_action?: string
+        contact?: string
+      }
+      if (!response.ok || !data.ok) {
+        showApiNotice({
+          message: '連携解除に失敗しました。',
+          diagnostic_code: data.diagnostic_code ?? String(response.status),
+          next_action: data.next_action,
+          contact: data.contact,
+        })
+        return
+      }
+
+      if (data.redirect_to) {
+        window.location.href = data.redirect_to
+        return
+      }
+
+      setNotice({ type: 'success', message: '連携を解除しました。' })
+      await refreshStatus()
+      await refreshQueue()
+    } catch (error) {
+      showApiNotice({
+        message: `連携解除に失敗しました: ${error instanceof Error ? error.message : 'unknown'}`,
+        diagnostic_code: 'CONNECTOR_DISCONNECT_FAILED',
+      })
     }
   }
 
   const postDrafts = async () => {
-    if (!isFreeePrimaryRegion) {
-      setNotice({ type: 'error', message: 'この地域の会計連携は準備中です。JPでfreee送信できます。' })
-      return
-    }
-
     if (postableCommands.length === 0) {
-      setNotice({ type: 'error', message: 'freee送信対象（OK）がありません。' })
+      showApiNotice({
+        message: '送信対象（OK）がありません。',
+        diagnostic_code: 'NO_POSTABLE_COMMANDS',
+      })
       return
     }
 
     setIsPostingDraft(true)
     setNotice(null)
     try {
-      const response = await fetch('/api/posting/freee/draft', {
+      const response = await fetch('/api/posting/draft', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ commands: postableCommands }),
+        body: JSON.stringify({
+          region: region.code,
+          mode,
+          provider,
+          commands: postableCommands,
+        }),
       })
       const data = (await response.json()) as {
         ok?: boolean
@@ -321,10 +474,17 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
         failed?: number
         results?: PostingResult[]
         diagnostic_code?: string
+        next_action?: string
+        contact?: string
       }
 
-      if (!response.ok || !data.ok || !Array.isArray(data.results)) {
-        setNotice({ type: 'error', message: `freee送信に失敗しました (${data.diagnostic_code ?? response.status})` })
+      if (!Array.isArray(data.results)) {
+        showApiNotice({
+          message: '下書き送信に失敗しました。',
+          diagnostic_code: data.diagnostic_code ?? String(response.status),
+          next_action: data.next_action,
+          contact: data.contact,
+        })
         return
       }
 
@@ -338,12 +498,19 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
 
       setNotice({
         type: (data.failed ?? 0) === 0 ? 'success' : 'error',
-        message: `freee下書き送信: 成功 ${data.success ?? 0} / 失敗 ${data.failed ?? 0}`,
+        message: `${activeProviderStatus?.label ?? provider} 下書き送信: 成功 ${data.success ?? 0} / 失敗 ${data.failed ?? 0}`,
+        code: data.diagnostic_code,
+        nextAction: data.next_action,
+        contact: data.contact,
       })
-      await refreshFreeeQueue()
+
+      await refreshQueue()
       await refreshStatus()
     } catch (error) {
-      setNotice({ type: 'error', message: `freee送信に失敗しました: ${error instanceof Error ? error.message : 'unknown'}` })
+      showApiNotice({
+        message: `下書き送信に失敗しました: ${error instanceof Error ? error.message : 'unknown'}`,
+        diagnostic_code: 'POSTING_DRAFT_FAILED',
+      })
     } finally {
       setIsPostingDraft(false)
     }
@@ -365,10 +532,16 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
               </div>
               <div className="flex gap-2">
                 <button
+                  onClick={() => setShowSettings((prev) => !prev)}
+                  className="rounded-xl border border-white/35 bg-white/10 px-3 py-2 text-sm font-semibold text-white hover:bg-white/20"
+                >
+                  設定
+                </button>
+                <button
                   onClick={onSwitchRegion}
                   className="rounded-xl border border-white/35 bg-white/10 px-3 py-2 text-sm font-semibold text-white hover:bg-white/20"
                 >
-                  地域を変更
+                  地域変更
                 </button>
                 <button
                   onClick={() => void signOut()}
@@ -380,6 +553,27 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
             </div>
             <p className="mt-3 text-xs text-white/80">{user?.primaryEmailAddress?.emailAddress ?? ''}</p>
           </div>
+
+          {showSettings && (
+            <div className="border-t border-slate-200 bg-slate-50 px-5 py-4 md:px-8">
+              <div className="grid gap-3 md:grid-cols-2">
+                <label className="text-sm font-semibold text-slate-700">
+                  運用モード
+                  <select
+                    value={mode}
+                    onChange={(event) => setMode(normalizeMode(event.target.value))}
+                    className="mt-1 w-full rounded-lg border border-slate-300 bg-white p-2"
+                  >
+                    <option value="tax_pro">Tax Pro（税理士主導）</option>
+                    <option value="direct">Direct（店舗直販）</option>
+                  </select>
+                </label>
+                <div className="rounded-lg border border-slate-200 bg-white p-3 text-xs text-slate-600">
+                  本サービスは税務判断を補助するツールです。最終判断・申告責任は税理士等の専門家にあります。
+                </div>
+              </div>
+            </div>
+          )}
 
           <div className="flex flex-wrap items-center gap-2 border-t border-slate-200 px-5 py-3 md:px-8">
             <button
@@ -408,8 +602,11 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
               {isLoadingStatus ? '更新中...' : '状態更新'}
             </button>
             <span className="ml-auto rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
-              {region.code} / {region.currency}
+              {region.code} / {region.currency} / {mode === 'tax_pro' ? 'Tax Pro' : 'Direct'}
             </span>
+          </div>
+          <div className="border-t border-slate-200 bg-amber-50 px-5 py-2 text-xs text-amber-900 md:px-8">
+            税務判断の最終責任は税理士等の専門家にあります。Tax manは判定補助と下書き作成を行います。
           </div>
 
           {notice && (
@@ -420,7 +617,10 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
                   : 'border-red-300 bg-red-50 text-red-800'
               }`}
             >
-              {notice.message}
+              <p>{notice.message}</p>
+              {notice.code && <p className="mt-1 text-xs font-semibold">Error Code: {notice.code}</p>}
+              {notice.nextAction && <p className="mt-1 text-xs">Next Action: {notice.nextAction}</p>}
+              {notice.contact && <p className="mt-1 text-xs">Provider Contact: {notice.contact}</p>}
             </div>
           )}
         </header>
@@ -431,30 +631,20 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
               <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <h2 className="text-lg font-bold text-slate-900">OCR取込</h2>
-                  {isFreeePrimaryRegion ? (
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => {
-                          window.location.href = '/api/freee/oauth/start'
-                        }}
-                        className="rounded-lg bg-blue-600 px-3 py-2 text-sm font-bold text-white"
-                      >
-                        freee連携
-                      </button>
-                      <button
-                        onClick={() => {
-                          window.location.href = '/api/freee/disconnect'
-                        }}
-                        className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold"
-                      >
-                        連携解除
-                      </button>
-                    </div>
-                  ) : (
-                    <span className="rounded-full bg-amber-100 px-2 py-1 text-xs font-semibold text-amber-800">
-                      この地域の会計連携は準備中
-                    </span>
-                  )}
+                  <div className="flex gap-2">
+                    <button
+                      onClick={startProviderConnect}
+                      className="rounded-lg bg-blue-600 px-3 py-2 text-sm font-bold text-white"
+                    >
+                      {activeProviderStatus?.label ?? provider}連携
+                    </button>
+                    <button
+                      onClick={() => void disconnectProvider()}
+                      className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold"
+                    >
+                      連携解除
+                    </button>
+                  </div>
                 </div>
                 <p className="mt-1 text-sm text-slate-600">証憑は処理のためだけに使用し、サーバーには永続保存しません。</p>
                 <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -569,9 +759,9 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
                 <h3 className="text-base font-bold text-slate-900">連携状態</h3>
                 <div className="mt-2 space-y-2 text-sm">
                   <div className="flex justify-between rounded-md bg-slate-50 px-3 py-2">
-                    <span>freee</span>
-                    <span className={status?.freee.connected ? 'font-bold text-emerald-700' : 'font-bold text-red-700'}>
-                      {status?.freee.connected ? '接続済み' : '未接続'}
+                    <span>会計</span>
+                    <span className={activeProviderStatus?.connected ? 'font-bold text-emerald-700' : 'font-bold text-red-700'}>
+                      {activeProviderStatus?.label ?? provider} / {activeProviderStatus?.connected ? '接続済み' : '未接続'}
                     </span>
                   </div>
                   <div className="flex justify-between rounded-md bg-slate-50 px-3 py-2">
@@ -583,7 +773,7 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
                   <div className="flex justify-between rounded-md bg-slate-50 px-3 py-2">
                     <span>接続方式</span>
                     <span className="font-semibold text-slate-700">
-                      {status?.freee.mode === 'shared_token' ? '共通トークン' : 'ユーザーOAuth'}
+                      {activeProviderStatus?.mode === 'shared_token' ? '共通トークン' : 'ユーザーOAuth'}
                     </span>
                   </div>
                 </div>
@@ -598,21 +788,19 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <h2 className="text-lg font-bold text-slate-900">判定キュー</h2>
                 <div className="flex gap-2">
-                  {isFreeePrimaryRegion && (
-                    <button
-                      onClick={() => void refreshFreeeQueue()}
-                      disabled={isLoadingQueue}
-                      className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold disabled:bg-slate-100"
-                    >
-                      {isLoadingQueue ? '取得中...' : 'freee下書きを取得'}
-                    </button>
-                  )}
+                  <button
+                    onClick={() => void refreshQueue()}
+                    disabled={isLoadingQueue}
+                    className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold disabled:bg-slate-100"
+                  >
+                    {isLoadingQueue ? '取得中...' : '会計下書きを取得'}
+                  </button>
                   <button
                     onClick={postDrafts}
                     disabled={isPostingDraft || postableCommands.length === 0}
                     className="rounded-lg bg-emerald-600 px-3 py-2 text-sm font-bold text-white disabled:bg-slate-400"
                   >
-                    {isPostingDraft ? '送信中...' : `OKを会計下書き送信 (${postableCommands.length})`}
+                    {isPostingDraft ? '送信中...' : `OKを下書き送信 (${postableCommands.length})`}
                   </button>
                 </div>
               </div>
@@ -696,7 +884,7 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
                       {record.posted ? (
                         <p className={`mt-2 text-xs ${record.posted.ok ? 'text-emerald-700' : 'text-red-700'}`}>
                           {record.posted.ok
-                            ? `送信済み (deal: ${record.posted.freee_deal_id ?? '-'})`
+                            ? `送信済み (${record.posted.provider ?? provider}: ${record.posted.remote_id ?? '-'})`
                             : `送信失敗 (${record.posted.diagnostic_code})`}
                         </p>
                       ) : null}
@@ -708,44 +896,40 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
 
             <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
               <h3 className="text-base font-bold text-slate-900">会計下書きキュー</h3>
-              {!isFreeePrimaryRegion ? (
-                <p className="mt-2 rounded-lg bg-slate-50 p-3 text-sm text-slate-600">
-                  {region.name} の会計コネクタは planned。今は判定キューまで運用し、接続後に下書き送信できます。
-                </p>
-              ) : (
-                <div className="mt-3 max-h-72 overflow-y-auto rounded-lg border border-slate-200">
-                  <table className="w-full text-sm">
-                    <thead className="sticky top-0 bg-slate-50">
+              <div className="mt-3 max-h-72 overflow-y-auto rounded-lg border border-slate-200">
+                <table className="w-full text-sm">
+                  <thead className="sticky top-0 bg-slate-50">
+                    <tr>
+                      <th className="p-2 text-left">Provider</th>
+                      <th className="p-2 text-left">ID</th>
+                      <th className="p-2 text-left">日付</th>
+                      <th className="p-2 text-right">金額</th>
+                      <th className="p-2 text-left">状態</th>
+                      <th className="p-2 text-left">メモ</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {reviewQueue.length === 0 ? (
                       <tr>
-                        <th className="p-2 text-left">ID</th>
-                        <th className="p-2 text-left">日付</th>
-                        <th className="p-2 text-right">金額</th>
-                        <th className="p-2 text-left">状態</th>
-                        <th className="p-2 text-left">メモ</th>
+                        <td colSpan={6} className="p-3 text-center text-slate-500">
+                          レビューキューがありません。
+                        </td>
                       </tr>
-                    </thead>
-                    <tbody>
-                      {freeeQueue.length === 0 ? (
-                        <tr>
-                          <td colSpan={5} className="p-3 text-center text-slate-500">
-                            freeeレビューキューがありません。
-                          </td>
+                    ) : (
+                      reviewQueue.map((row, index) => (
+                        <tr key={`${row.provider}-${row.id ?? 'n'}-${index}`} className="border-t border-slate-100">
+                          <td className="p-2">{row.provider}</td>
+                          <td className="p-2">{row.id ?? '-'}</td>
+                          <td className="p-2">{row.issue_date || '-'}</td>
+                          <td className="p-2 text-right">{formatMoney(row.amount, row.currency ?? region.currency)}</td>
+                          <td className="p-2">{row.status || '-'}</td>
+                          <td className="p-2">{row.memo || '-'}</td>
                         </tr>
-                      ) : (
-                        freeeQueue.map((row, index) => (
-                          <tr key={`${row.id ?? 'n'}-${index}`} className="border-t border-slate-100">
-                            <td className="p-2">{row.id ?? '-'}</td>
-                            <td className="p-2">{row.issue_date || '-'}</td>
-                            <td className="p-2 text-right">{formatMoney(row.amount, region.currency)}</td>
-                            <td className="p-2">{row.status || '-'}</td>
-                            <td className="p-2">{row.memo || '-'}</td>
-                          </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              )}
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </section>
         )}

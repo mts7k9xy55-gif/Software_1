@@ -4,64 +4,57 @@ import { auth } from '@clerk/nextjs/server'
 
 import {
   applyRefreshedFreeeCookies,
-  listFreeeExpenseDrafts,
-  readFreeeSession,
 } from '@/lib/connectors/freee'
-
-function summarizeReview(deal: Record<string, unknown>) {
-  const id = Number(deal.id ?? 0)
-  const issueDate = String(deal.issue_date ?? '')
-  const amount = Number(deal.amount ?? 0)
-  const status = String(deal.status ?? deal.type ?? 'unknown')
-  const memo = String(deal.description ?? deal.ref_number ?? '').slice(0, 120)
-
-  return {
-    id: Number.isFinite(id) ? id : null,
-    issue_date: issueDate,
-    amount: Number.isFinite(amount) ? amount : 0,
-    status,
-    memo,
-  }
-}
+import { fetchReviewQueueByProvider, resolveProvider } from '@/lib/connectors/accounting/router'
+import { resolveTenantContext } from '@/lib/core/tenant'
 
 export async function GET(request: NextRequest) {
-  const { userId } = auth()
-  if (!userId) return NextResponse.json({ ok: false, diagnostic_code: 'AUTH_REQUIRED' }, { status: 401 })
-
-  const session = readFreeeSession(cookies())
-  if (!session.accessToken || !session.companyId) {
-    return NextResponse.json(
-      {
-        ok: false,
-        diagnostic_code: 'FREEE_NOT_CONNECTED',
-        message: 'freee未接続のためレビューキューを取得できません。',
-      },
-      { status: 401 }
-    )
-  }
+  const authState = auth()
+  if (!authState.userId) return NextResponse.json({ ok: false, diagnostic_code: 'AUTH_REQUIRED' }, { status: 401 })
 
   const limit = Math.max(1, Math.min(100, Number(request.nextUrl.searchParams.get('limit') ?? 30)))
-  const fetched = await listFreeeExpenseDrafts({ session, limit })
+  const tenant = resolveTenantContext({
+    auth: authState,
+    regionCode: request.nextUrl.searchParams.get('region'),
+    mode: request.nextUrl.searchParams.get('mode'),
+  })
+  if (!tenant) return NextResponse.json({ ok: false, diagnostic_code: 'TENANT_CONTEXT_REQUIRED' }, { status: 401 })
+
+  const routing = resolveProvider({
+    regionCode: request.nextUrl.searchParams.get('region') ?? tenant.region_code,
+    requestedProvider: request.nextUrl.searchParams.get('provider'),
+  })
+
+  const fetched = await fetchReviewQueueByProvider({
+    cookieStore: cookies(),
+    provider: routing.provider,
+    limit,
+  })
 
   if (!fetched.ok) {
     const response = NextResponse.json(
       {
         ok: false,
-        diagnostic_code: 'FREEE_QUEUE_FETCH_FAILED',
+        provider: routing.provider,
+        diagnostic_code: fetched.diagnostic_code,
         status: fetched.status,
+        next_action: 'Reconnect provider or check account configuration.',
+        contact: routing.definition.support.url,
       },
       { status: fetched.status }
     )
-    applyRefreshedFreeeCookies(response, fetched.refreshed)
+    if (routing.provider === 'freee') applyRefreshedFreeeCookies(response, fetched.freeeRefresh)
     return response
   }
 
-  const queue = fetched.deals.map(summarizeReview)
   const response = NextResponse.json({
     ok: true,
-    diagnostic_code: 'FREEE_QUEUE_FETCHED',
-    queue,
+    provider: routing.provider,
+    diagnostic_code: fetched.diagnostic_code,
+    queue: fetched.queue,
+    next_action: 'Review queued drafts in provider.',
+    contact: routing.definition.support.url,
   })
-  applyRefreshedFreeeCookies(response, fetched.refreshed)
+  if (routing.provider === 'freee') applyRefreshedFreeeCookies(response, fetched.freeeRefresh)
   return response
 }

@@ -3,14 +3,19 @@ import { auth } from '@clerk/nextjs/server'
 
 import { emitAuditMeta, createAuditMeta } from '@/lib/core/audit'
 import { evaluateTransaction } from '@/lib/core/decision'
+import { resolveTenantContext } from '@/lib/core/tenant'
 import type { CanonicalTransaction } from '@/lib/core/types'
 
 export async function POST(request: NextRequest) {
   try {
-    const { userId } = auth()
-    if (!userId) return NextResponse.json({ ok: false, diagnostic_code: 'AUTH_REQUIRED' }, { status: 401 })
+    const authState = auth()
+    if (!authState.userId) return NextResponse.json({ ok: false, diagnostic_code: 'AUTH_REQUIRED' }, { status: 401 })
 
-    const body = (await request.json()) as { transaction?: CanonicalTransaction }
+    const body = (await request.json()) as {
+      transaction?: CanonicalTransaction
+      mode?: string
+      region?: string
+    }
     const transaction = body.transaction
     if (!transaction?.transaction_id) {
       return NextResponse.json(
@@ -19,10 +24,18 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    const tenant = resolveTenantContext({
+      auth: authState,
+      regionCode: body.region ?? transaction.country_code ?? 'JP',
+      mode: body.mode,
+    })
+    if (!tenant) return NextResponse.json({ ok: false, diagnostic_code: 'TENANT_CONTEXT_REQUIRED' }, { status: 401 })
+
     const decision = await evaluateTransaction(transaction)
     emitAuditMeta(
       createAuditMeta({
-        actor_user_id: userId,
+        actor_user_id: tenant.user_id,
+        organization_id: tenant.organization_id,
         event_type: 'decision_evaluate',
         transaction_id: transaction.transaction_id,
         decision_id: decision.decision_id,

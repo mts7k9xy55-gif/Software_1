@@ -5,12 +5,13 @@ import { extractExpenseByGeminiOcr } from '@/lib/connectors/ocr/gemini'
 import { emitAuditMeta, createAuditMeta } from '@/lib/core/audit'
 import { evaluateTransaction, redactSensitiveText } from '@/lib/core/decision'
 import { getJurisdictionProfile } from '@/lib/core/jurisdiction'
+import { resolveTenantContext } from '@/lib/core/tenant'
 import type { CanonicalTransaction } from '@/lib/core/types'
 
 export async function POST(request: NextRequest) {
   try {
-    const { userId } = auth()
-    if (!userId) {
+    const authState = auth()
+    if (!authState.userId) {
       return NextResponse.json({ ok: false, diagnostic_code: 'AUTH_REQUIRED' }, { status: 401 })
     }
 
@@ -25,10 +26,24 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const body = (await request.json()) as { imageDataUrl?: string; country_code?: string }
+    const body = (await request.json()) as {
+      imageDataUrl?: string
+      country_code?: string
+      mode?: string
+      region?: string
+    }
     const imageDataUrl = String(body.imageDataUrl ?? '')
     if (!imageDataUrl) {
       return NextResponse.json({ ok: false, diagnostic_code: 'MISSING_IMAGE' }, { status: 400 })
+    }
+
+    const tenant = resolveTenantContext({
+      auth: authState,
+      regionCode: body.region ?? body.country_code ?? 'JP',
+      mode: body.mode,
+    })
+    if (!tenant) {
+      return NextResponse.json({ ok: false, diagnostic_code: 'TENANT_CONTEXT_REQUIRED' }, { status: 401 })
     }
 
     const countryCode = String(body.country_code ?? 'JP').toUpperCase()
@@ -52,7 +67,8 @@ export async function POST(request: NextRequest) {
 
     emitAuditMeta(
       createAuditMeta({
-        actor_user_id: userId,
+        actor_user_id: tenant.user_id,
+        organization_id: tenant.organization_id,
         event_type: 'intake_ocr_classify',
         transaction_id: transaction.transaction_id,
         decision_id: decision.decision_id,

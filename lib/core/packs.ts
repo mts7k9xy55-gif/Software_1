@@ -17,7 +17,7 @@ export const PACKS: PackDefinition[] = [
     key: 'core_filing',
     title: 'Core Filing',
     enabledByDefault: true,
-    description: 'Intake + Decision Queue + freee draft posting.',
+    description: 'Intake + Decision Queue + provider draft posting.',
   },
   {
     key: 'shift_touch',

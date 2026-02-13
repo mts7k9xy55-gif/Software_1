@@ -2,32 +2,53 @@ import { cookies } from 'next/headers'
 import { NextResponse } from 'next/server'
 import { auth } from '@clerk/nextjs/server'
 
+import { getConnectorStatuses, resolveProvider } from '@/lib/connectors/accounting/router'
 import { getEnabledPacks } from '@/lib/core/packs'
-import { readFreeeSession } from '@/lib/connectors/freee'
 import { getRegionDefinition } from '@/lib/core/regions'
+import { resolveTenantContext } from '@/lib/core/tenant'
 
 export async function GET(request: Request) {
-  const { userId } = auth()
-  if (!userId) return NextResponse.json({ ok: false, diagnostic_code: 'AUTH_REQUIRED' }, { status: 401 })
+  const authState = auth()
+  if (!authState.userId) return NextResponse.json({ ok: false, diagnostic_code: 'AUTH_REQUIRED' }, { status: 401 })
 
-  const session = readFreeeSession(cookies())
   const url = new URL(request.url)
   const region = getRegionDefinition(url.searchParams.get('region'))
+  const tenant = resolveTenantContext({
+    auth: authState,
+    regionCode: region.code,
+    mode: url.searchParams.get('mode'),
+  })
 
-  const freeeConfigured = Boolean(
-    process.env.NEXT_PUBLIC_FREEE_CLIENT_ID &&
-      process.env.FREEE_CLIENT_SECRET &&
-      process.env.NEXT_PUBLIC_FREEE_REDIRECT_URI
-  )
+  if (!tenant) return NextResponse.json({ ok: false, diagnostic_code: 'TENANT_CONTEXT_REQUIRED' }, { status: 401 })
+
+  const routing = resolveProvider({
+    regionCode: region.code,
+    requestedProvider: url.searchParams.get('provider'),
+  })
+
+  const providerStatuses = getConnectorStatuses(cookies())
+  const activeProviderStatus = providerStatuses.find((row) => row.provider === routing.provider)
+  const freeeStatus = providerStatuses.find((row) => row.provider === 'freee')
 
   const status = {
-    freee: {
-      configured: freeeConfigured,
-      connected: Boolean(session.accessToken),
-      companyId: session.companyId,
-      nextAction: session.accessToken ? 'connected' : 'open_oauth',
-      mode: session.sharedMode ? 'shared_token' : 'oauth_per_user',
-    },
+    provider: routing.provider,
+    provider_status: activeProviderStatus,
+    providers: providerStatuses,
+    freee: freeeStatus
+      ? {
+          configured: freeeStatus.configured,
+          connected: freeeStatus.connected,
+          companyId: freeeStatus.account_context ? Number(freeeStatus.account_context) : null,
+          nextAction: freeeStatus.next_action,
+          mode: freeeStatus.mode,
+        }
+      : {
+          configured: false,
+          connected: false,
+          companyId: null,
+          nextAction: 'open_oauth',
+          mode: 'oauth_per_user',
+        },
     ocr: {
       enabled: (process.env.ENABLE_RECEIPT_OCR ?? '0') === '1',
       provider: process.env.GEMINI_API_KEY ? 'gemini' : 'none',
@@ -37,9 +58,10 @@ export async function GET(request: Request) {
       model: process.env.GEMINI_MODEL ?? 'gemini-2.5-flash-lite',
     },
     packs: getEnabledPacks().map((pack) => ({ key: pack.key, title: pack.title })),
+    tenant,
     support_boundary: {
-      owner_scope: 'oauth_connectivity_and_classification_pipeline',
-      freee_scope: 'accounting_rules_and_freee_internal_processing',
+      owner_scope: 'connectivity_and_classification_pipeline',
+      provider_scope: 'accounting_rules_and_provider_internal_processing',
     },
     region: {
       code: region.code,

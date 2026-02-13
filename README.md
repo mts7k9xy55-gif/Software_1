@@ -5,7 +5,7 @@ Global filing automation app focused on:
 - All-transaction intake
 - AI expense classification
 - Accountant-first review queue
-- freee draft posting
+- region-based accounting draft posting
 
 The default UX is now:
 
@@ -32,6 +32,14 @@ NEXT_PUBLIC_FREEE_CLIENT_ID=...
 FREEE_CLIENT_SECRET=...
 NEXT_PUBLIC_FREEE_REDIRECT_URI=https://pos.allgoai.org/api/freee/oauth/callback
 
+QBO_CLIENT_ID=...
+QBO_CLIENT_SECRET=...
+QBO_REDIRECT_URI=https://pos.allgoai.org/api/connectors/oauth/callback?provider=quickbooks
+
+XERO_CLIENT_ID=...
+XERO_CLIENT_SECRET=...
+XERO_REDIRECT_URI=https://pos.allgoai.org/api/connectors/oauth/callback?provider=xero
+
 GEMINI_API_KEY=...
 GEMINI_MODEL=gemini-2.5-flash-lite
 ENABLE_EXTERNAL_LLM=1
@@ -45,6 +53,16 @@ FREEE_SHARED_MODE=1
 FREEE_SHARED_ACCESS_TOKEN=...
 FREEE_SHARED_REFRESH_TOKEN=...
 FREEE_SHARED_COMPANY_ID=1234567
+
+QBO_SHARED_MODE=1
+QBO_SHARED_ACCESS_TOKEN=...
+QBO_SHARED_REFRESH_TOKEN=...
+QBO_SHARED_REALM_ID=...
+
+XERO_SHARED_MODE=1
+XERO_SHARED_ACCESS_TOKEN=...
+XERO_SHARED_REFRESH_TOKEN=...
+XERO_SHARED_TENANT_ID=...
 ```
 
 Optional for legacy endpoints only:
@@ -67,9 +85,17 @@ npm run dev
 - `POST /api/intake/ocr-classify`
 - `POST /api/intake/manual`
 - `POST /api/decision/evaluate`
-- `POST /api/posting/freee/draft`
-- `GET /api/queue/review`
+- `POST /api/posting/draft`
+- `GET /api/queue/review?provider=...`
+- `GET /api/connectors/catalog?region=...`
 - `GET /api/connectors/status`
+- `GET /api/connectors/oauth/start`
+- `GET /api/connectors/oauth/callback`
+- `POST /api/connectors/disconnect`
+
+Legacy compatibility:
+- `POST /api/posting/freee/draft` (delegates to common router)
+- `GET /api/posting/freee/draft` (freee queue compatibility)
 
 ## Architecture Modules
 
@@ -77,8 +103,10 @@ npm run dev
 - `lib/core/decision.ts`: rule-first + LLM supplement + confidence gate
 - `lib/core/jurisdiction.ts`: country profile plugin contract (JP default)
 - `lib/core/regions.ts`: region door + platform routing map
+- `lib/core/tenant.ts`: tenant context resolver (`organization_id`, `mode`)
 - `lib/core/packs.ts`: business-pack extension model
 - `lib/connectors/freee.ts`: OAuth token refresh + posting/list adapters
+- `lib/connectors/accounting/router.ts`: provider router (`freee`, `quickbooks`, `xero`)
 - `lib/connectors/ocr/gemini.ts`: receipt OCR extractor
 
 ## Security / Privacy
