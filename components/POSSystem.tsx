@@ -168,6 +168,18 @@ interface TaxOcrApiResponse {
   error?: string
 }
 
+interface ReceiptUploadApiResponse {
+  ok: boolean
+  filePath?: string
+  error?: string
+}
+
+interface ReceiptSignedUrlApiResponse {
+  ok: boolean
+  signedUrl?: string
+  error?: string
+}
+
 function formatFreeeTaxLabel(tax: FreeeTax): string {
   const ja = String(tax.name_ja ?? '').trim()
   if (ja) return ja
@@ -237,18 +249,13 @@ create index if not exists idx_inventory_adjustments_shop_year
   on public.inventory_adjustments(shop_id, fiscal_year);`
 
 const EXPENSE_BUCKET_SETUP_SQL = `insert into storage.buckets (id, name, public)
-values ('expense-receipts', 'expense-receipts', true)
-on conflict (id) do nothing;
+values ('expense-receipts', 'expense-receipts', false)
+on conflict (id) do update set public = false;
 
+-- クライアント直接アクセスではなく、サーバーAPI（service role）経由で扱う前提。
+-- 既存の公開ポリシーは削除する。
 drop policy if exists "Expense receipts public read" on storage.objects;
-create policy "Expense receipts public read"
-on storage.objects for select
-using (bucket_id = 'expense-receipts');
-
-drop policy if exists "Expense receipts public upload" on storage.objects;
-create policy "Expense receipts public upload"
-on storage.objects for insert
-with check (bucket_id = 'expense-receipts');`
+drop policy if exists "Expense receipts public upload" on storage.objects;`
 
 const yenFormatter = new Intl.NumberFormat('ja-JP')
 
@@ -583,6 +590,7 @@ export default function POSSystem() {
   const [isImportingSalesCsv, setIsImportingSalesCsv] = useState(false)
   const [isImportingExpensesCsv, setIsImportingExpensesCsv] = useState(false)
   const [isReceiptOcrRunning, setIsReceiptOcrRunning] = useState(false)
+  const [openingReceiptExpenseId, setOpeningReceiptExpenseId] = useState<string | null>(null)
 
   const [inventoryYear, setInventoryYear] = useState<string>(() => String(new Date().getFullYear()))
   const [inventoryAmount, setInventoryAmount] = useState('')
@@ -1185,11 +1193,14 @@ export default function POSSystem() {
           actionBody: EXPENSE_BUCKET_SETUP_SQL,
         })
       } else if (bucketCheck.error.statusCode === '403') {
+        // 非公開バケットで403になるのは想定内。公開アクセス不要。
+      } else {
         issues.push({
           id: 'bucket-policy-expense-receipts',
-          title: 'レシート保存権限不足',
-          detail: 'expense-receipts へのアクセス権限が不足しています。storage policyを追加してください。',
-          actionLabel: 'Policy作成SQL',
+          title: 'レシート保存設定を確認',
+          detail:
+            'expense-receipts へのアクセス確認に失敗しました。非公開バケット運用のため、サーバーAPIとservice roleの設定を確認してください。',
+          actionLabel: 'Bucket設定SQL',
           actionBody: EXPENSE_BUCKET_SETUP_SQL,
         })
       }
@@ -1603,19 +1614,49 @@ export default function POSSystem() {
   }
 
   const uploadExpenseReceipt = async (file: File): Promise<string | null> => {
-    if (!activeShopId) return null
+    const formData = new FormData()
+    formData.append('file', file)
+    formData.append('expenseDate', expenseDate)
 
-    const extension = file.name.includes('.') ? file.name.split('.').pop() : 'jpg'
-    const fileName = `${activeShopId}/${expenseDate}/${Date.now()}.${extension}`
+    const response = await fetch('/api/receipts/upload', {
+      method: 'POST',
+      body: formData,
+    })
+    const data = (await response.json()) as ReceiptUploadApiResponse
+    if (!response.ok || !data.ok || !data.filePath) return null
+    return data.filePath
+  }
 
-    const { error } = await supabase.storage.from('expense-receipts').upload(fileName, file)
-    if (error) return null
+  const openExpenseReceipt = async (expenseId: string, receiptRef: string) => {
+    const trimmed = receiptRef.trim()
+    if (!trimmed) return
 
-    const {
-      data: { publicUrl },
-    } = supabase.storage.from('expense-receipts').getPublicUrl(fileName)
+    if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+      window.open(trimmed, '_blank', 'noopener,noreferrer')
+      return
+    }
 
-    return publicUrl
+    setOpeningReceiptExpenseId(expenseId)
+    try {
+      const response = await fetch('/api/receipts/signed-url', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: trimmed }),
+      })
+      const data = (await response.json()) as ReceiptSignedUrlApiResponse
+      if (!response.ok || !data.ok || !data.signedUrl) {
+        setNotice({ type: 'error', message: data.error ?? 'レシートURLの生成に失敗しました。' })
+        return
+      }
+      window.open(data.signedUrl, '_blank', 'noopener,noreferrer')
+    } catch (error) {
+      setNotice({
+        type: 'error',
+        message: `レシート表示に失敗しました: ${error instanceof Error ? error.message : 'unknown'}`,
+      })
+    } finally {
+      setOpeningReceiptExpenseId(null)
+    }
   }
 
   const importSalesCsv = async () => {
@@ -1869,7 +1910,7 @@ export default function POSSystem() {
         setIsSavingExpense(false)
         setNotice({
           type: 'error',
-          message: 'レシート画像のアップロードに失敗しました。bucket: expense-receipts を確認してください。',
+          message: 'レシート画像のアップロードに失敗しました。サーバー側のStorage設定を確認してください。',
         })
         return
       }
@@ -3441,14 +3482,14 @@ export default function POSSystem() {
                             </td>
                             <td className="p-2 text-center">
                               {expense.receipt_url ? (
-                                <a
-                                  href={expense.receipt_url}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  className="text-blue-600 underline"
+                                <button
+                                  type="button"
+                                  onClick={() => void openExpenseReceipt(expense.id, expense.receipt_url ?? '')}
+                                  disabled={openingReceiptExpenseId === expense.id}
+                                  className="text-blue-600 underline disabled:text-slate-400"
                                 >
-                                  表示
-                                </a>
+                                  {openingReceiptExpenseId === expense.id ? '生成中...' : '表示'}
+                                </button>
                               ) : (
                                 <span className="text-slate-400">-</span>
                               )}
