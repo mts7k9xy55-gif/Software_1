@@ -24,6 +24,8 @@ Legacy POS/tax views remain in the repo but are not the default home flow.
 
 ## Required Environment Variables
 
+Copy `/Users/yutoinoue/Desktop/Software_1/.env.taxman.template` to `.env.local` and fill values.
+
 ```bash
 NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=...
 CLERK_SECRET_KEY=...
