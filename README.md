@@ -87,6 +87,7 @@ npm run dev
 - `docs/DESIGN_EXECUTION_PLAN_2026-02.md`: 設計を実装に落とすための運用計画
 - `docs/TAX_PACK_SPEC.md`: 申告パックの出力仕様とブロッキングポリシー
 - `docs/security/RLS_AUDIT_STORAGE_HARDENING.sql`: RLS + Storage非公開 + 監査ログの適用テンプレート
+- `docs/security/PRIVACY_POLICY_MINIMAL.md`: 最小運用向けプライバシーポリシー
 
 ## PWA
 

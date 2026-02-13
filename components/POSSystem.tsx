@@ -41,6 +41,8 @@ interface MenuItem {
   shop_id: string
   only_takeout?: boolean | null
   only_eat_in?: boolean | null
+  stock_quantity?: number | null
+  stock_alert_threshold?: number | null
 }
 
 interface SaleItem {
@@ -82,6 +84,18 @@ interface InventoryAdjustmentRecord {
   shop_id: string
   fiscal_year: number
   amount: number
+}
+
+interface StaffShiftRecord {
+  id: string
+  shop_id: string
+  shift_date: string
+  staff_name: string
+  start_time: string
+  end_time: string
+  hourly_wage: number
+  break_minutes: number
+  created_at: string
 }
 
 interface SetupIssue {
@@ -248,6 +262,25 @@ create table if not exists public.inventory_adjustments (
 create index if not exists idx_inventory_adjustments_shop_year
   on public.inventory_adjustments(shop_id, fiscal_year);
 
+alter table if exists public.menu_items
+  add column if not exists stock_quantity integer,
+  add column if not exists stock_alert_threshold integer;
+
+create table if not exists public.staff_shifts (
+  id uuid primary key default gen_random_uuid(),
+  shop_id uuid not null references public.shops(id) on delete cascade,
+  shift_date date not null,
+  staff_name text not null,
+  start_time text not null,
+  end_time text not null,
+  hourly_wage integer not null check (hourly_wage >= 0),
+  break_minutes integer not null default 0 check (break_minutes >= 0),
+  created_at timestamptz not null default now()
+);
+
+create index if not exists idx_staff_shifts_shop_date
+  on public.staff_shifts(shop_id, shift_date desc);
+
 create table if not exists public.audit_logs (
   id uuid primary key default gen_random_uuid(),
   shop_id uuid not null references public.shops(id) on delete cascade,
@@ -407,6 +440,19 @@ function parseDateYmd(value: string): string | null {
   return `${yyyy}-${mm}-${dd}`
 }
 
+function toShiftHours(startTime: string, endTime: string, breakMinutes: number): number {
+  const [sh = '0', sm = '0'] = startTime.split(':')
+  const [eh = '0', em = '0'] = endTime.split(':')
+  const start = Number(sh) * 60 + Number(sm)
+  const end = Number(eh) * 60 + Number(em)
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return 0
+  let minutes = end - start
+  if (minutes < 0) minutes += 24 * 60
+  minutes -= Math.max(0, breakMinutes)
+  if (minutes < 0) minutes = 0
+  return Math.round((minutes / 60) * 100) / 100
+}
+
 function filingItemStatusLabel(status: FilingItemStatus): string {
   if (status === 'READY') return '完了'
   if (status === 'REVIEW') return '確認'
@@ -479,6 +525,14 @@ function sanitizeMenuItems(input: unknown[]): MenuItem[] {
       shop_id: String(record.shop_id ?? ''),
       only_takeout: Boolean(record.only_takeout),
       only_eat_in: Boolean(record.only_eat_in),
+      stock_quantity:
+        record.stock_quantity == null || Number.isNaN(Number(record.stock_quantity))
+          ? null
+          : Math.floor(Number(record.stock_quantity)),
+      stock_alert_threshold:
+        record.stock_alert_threshold == null || Number.isNaN(Number(record.stock_alert_threshold))
+          ? null
+          : Math.floor(Number(record.stock_alert_threshold)),
     }
   })
 }
@@ -536,6 +590,23 @@ function sanitizeExpenses(input: unknown[]): ExpenseRecord[] {
   })
 }
 
+function sanitizeShifts(input: unknown[]): StaffShiftRecord[] {
+  return input.map((row) => {
+    const record = row as Partial<StaffShiftRecord>
+    return {
+      id: String(record.id ?? ''),
+      shop_id: String(record.shop_id ?? ''),
+      shift_date: String(record.shift_date ?? ''),
+      staff_name: String(record.staff_name ?? ''),
+      start_time: String(record.start_time ?? ''),
+      end_time: String(record.end_time ?? ''),
+      hourly_wage: Math.max(0, Math.floor(Number(record.hourly_wage ?? 0))),
+      break_minutes: Math.max(0, Math.floor(Number(record.break_minutes ?? 0))),
+      created_at: String(record.created_at ?? ''),
+    }
+  })
+}
+
 function isMissingColumnError(error: { code?: string; message?: string } | null, columnName: string): boolean {
   if (!error) return false
   const message = error.message ?? ''
@@ -586,6 +657,8 @@ export default function POSSystem() {
   const [imagePreview, setImagePreview] = useState<string | null>(null)
   const [newOnlyTakeout, setNewOnlyTakeout] = useState(false)
   const [newOnlyEatIn, setNewOnlyEatIn] = useState(false)
+  const [newStockQuantity, setNewStockQuantity] = useState('')
+  const [newStockAlertThreshold, setNewStockAlertThreshold] = useState('')
 
   const [showShopNameModal, setShowShopNameModal] = useState(false)
   const [shopNameInput, setShopNameInput] = useState('')
@@ -605,6 +678,19 @@ export default function POSSystem() {
   const [isImportingExpensesCsv, setIsImportingExpensesCsv] = useState(false)
   const [isReceiptOcrRunning, setIsReceiptOcrRunning] = useState(false)
   const [openingReceiptExpenseId, setOpeningReceiptExpenseId] = useState<string | null>(null)
+  const [shifts, setShifts] = useState<StaffShiftRecord[]>([])
+  const [isShiftLoading, setIsShiftLoading] = useState(false)
+  const [isSavingShift, setIsSavingShift] = useState(false)
+  const [shiftDate, setShiftDate] = useState<string>(() => toDateInputValue(new Date()))
+  const [shiftStaffName, setShiftStaffName] = useState('')
+  const [shiftStartTime, setShiftStartTime] = useState('09:00')
+  const [shiftEndTime, setShiftEndTime] = useState('17:00')
+  const [shiftHourlyWage, setShiftHourlyWage] = useState('1100')
+  const [shiftBreakMinutes, setShiftBreakMinutes] = useState('60')
+  const [isSyncingFreeeHr, setIsSyncingFreeeHr] = useState(false)
+  const [demandForecast, setDemandForecast] = useState<Array<{ date: string; expectedSales: number; factor: number }> | null>(null)
+  const [isForecasting, setIsForecasting] = useState(false)
+  const [forecastEventNote, setForecastEventNote] = useState('')
 
   const [inventoryYear, setInventoryYear] = useState<string>(() => String(new Date().getFullYear()))
   const [inventoryAmount, setInventoryAmount] = useState('')
@@ -671,6 +757,14 @@ export default function POSSystem() {
   const periodProfit = useMemo(
     () => periodSummary.grossSales - periodExpenseTotal - inventoryAdjustmentAmount,
     [periodSummary.grossSales, periodExpenseTotal, inventoryAdjustmentAmount]
+  )
+  const shiftLaborTotal = useMemo(
+    () =>
+      shifts.reduce((sum, shift) => {
+        const hours = toShiftHours(shift.start_time, shift.end_time, shift.break_minutes)
+        return sum + Math.floor(hours * shift.hourly_wage)
+      }, 0),
+    [shifts]
   )
   const classifiedExpenses = useMemo<ClassifiedExpense[]>(() => {
     const base = classifyExpenses(expenses)
@@ -1070,14 +1164,18 @@ export default function POSSystem() {
 
     let { data, error } = await supabase
       .from('menu_items')
-      .select('id, name, price, tax_rate, image_url, shop_id, only_takeout, only_eat_in')
+      .select(
+        'id, name, price, tax_rate, image_url, shop_id, only_takeout, only_eat_in, stock_quantity, stock_alert_threshold'
+      )
       .eq('shop_id', shopId)
       .order('name', { ascending: true })
 
     if (isInvalidUuidError(error) && uuidShopId) {
       const retry = await supabase
         .from('menu_items')
-        .select('id, name, price, tax_rate, image_url, shop_id, only_takeout, only_eat_in')
+        .select(
+          'id, name, price, tax_rate, image_url, shop_id, only_takeout, only_eat_in, stock_quantity, stock_alert_threshold'
+        )
         .eq('shop_id', uuidShopId)
         .order('name', { ascending: true })
       data = retry.data
@@ -1094,7 +1192,9 @@ export default function POSSystem() {
       isMissingColumnError(error, 'shop_id') ||
       isMissingColumnError(error, 'tax_rate') ||
       isMissingColumnError(error, 'only_takeout') ||
-      isMissingColumnError(error, 'only_eat_in')
+      isMissingColumnError(error, 'only_eat_in') ||
+      isMissingColumnError(error, 'stock_quantity') ||
+      isMissingColumnError(error, 'stock_alert_threshold')
     ) {
       const { data: legacyData, error: legacyError } = await supabase
         .from('menu_items')
@@ -1181,6 +1281,7 @@ export default function POSSystem() {
       { table: 'sales', select: 'id' },
       { table: 'expenses', select: 'id' },
       { table: 'inventory_adjustments', select: 'id' },
+      { table: 'staff_shifts', select: 'id' },
       { table: 'audit_logs', select: 'id' },
     ]
 
@@ -1346,6 +1447,119 @@ export default function POSSystem() {
     return record?.amount ?? 0
   }, [activeShopId, inventoryYear])
 
+  const fetchShifts = useCallback(async () => {
+    if (!activeShopId || !startDate || !endDate) return
+    setIsShiftLoading(true)
+    try {
+      const { data, error } = await supabase
+        .from('staff_shifts')
+        .select('id, shop_id, shift_date, staff_name, start_time, end_time, hourly_wage, break_minutes, created_at')
+        .eq('shop_id', activeShopId)
+        .gte('shift_date', startDate)
+        .lte('shift_date', endDate)
+        .order('shift_date', { ascending: false })
+        .order('created_at', { ascending: false })
+
+      if (error) {
+        if (isMissingTableError(error)) {
+          setShifts([])
+          return
+        }
+        setNotice({ type: 'error', message: `シフト取得に失敗しました: ${error.message}` })
+        return
+      }
+      setShifts(sanitizeShifts((data ?? []) as unknown[]))
+    } finally {
+      setIsShiftLoading(false)
+    }
+  }, [activeShopId, endDate, startDate])
+
+  const handleSaveShift = async (event: React.FormEvent) => {
+    event.preventDefault()
+    if (!shopId) return
+
+    const ensuredShopId = await ensureShopRecord()
+    if (!ensuredShopId) return
+
+    const staffName = shiftStaffName.trim()
+    const hourlyWage = Number(shiftHourlyWage)
+    const breakMinutes = Number(shiftBreakMinutes)
+    if (!shiftDate || !staffName || !shiftStartTime || !shiftEndTime) {
+      setNotice({ type: 'error', message: 'シフトの必須項目を入力してください。' })
+      return
+    }
+    if (!Number.isFinite(hourlyWage) || hourlyWage < 0) {
+      setNotice({ type: 'error', message: '時給は0以上で入力してください。' })
+      return
+    }
+    if (!Number.isFinite(breakMinutes) || breakMinutes < 0) {
+      setNotice({ type: 'error', message: '休憩分は0以上で入力してください。' })
+      return
+    }
+
+    setIsSavingShift(true)
+    setNotice(null)
+    const { error } = await supabase.from('staff_shifts').insert({
+      shop_id: ensuredShopId,
+      shift_date: shiftDate,
+      staff_name: staffName,
+      start_time: shiftStartTime,
+      end_time: shiftEndTime,
+      hourly_wage: Math.floor(hourlyWage),
+      break_minutes: Math.floor(breakMinutes),
+    })
+    setIsSavingShift(false)
+
+    if (error) {
+      if (isMissingTableError(error)) {
+        setNotice({
+          type: 'error',
+          message: 'staff_shifts テーブルが未作成です。導入チェックのSQLを再実行してください。',
+        })
+        return
+      }
+      setNotice({ type: 'error', message: `シフト保存に失敗しました: ${error.message}` })
+      return
+    }
+
+    setShiftStaffName('')
+    await fetchShifts()
+    setNotice({ type: 'success', message: 'シフトを保存しました。' })
+    void logAuditEvent('shift_saved', 'staff_shift', undefined, { shiftDate })
+  }
+
+  const syncShiftsToFreeeHr = async () => {
+    if (shifts.length === 0) {
+      setNotice({ type: 'error', message: '同期対象のシフトがありません。' })
+      return
+    }
+    setIsSyncingFreeeHr(true)
+    try {
+      const response = await fetch('/api/freee/hr/sync-shifts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ shifts }),
+      })
+      const data = (await response.json()) as { ok?: boolean; message?: string; error?: string; count?: number }
+      if (!response.ok || !data.ok) {
+        setNotice({ type: 'error', message: data.error ?? 'freee人事労務への同期に失敗しました。' })
+        return
+      }
+      setNotice({
+        type: 'success',
+        message: data.message ?? `freee人事労務に ${data.count ?? shifts.length} 件のシフトを同期しました。`,
+      })
+      void logAuditEvent('freee_hr_sync', 'staff_shift', undefined, { count: data.count ?? shifts.length })
+    } catch (error) {
+      setNotice({
+        type: 'error',
+        message: `freee人事労務への同期に失敗しました: ${error instanceof Error ? error.message : 'unknown'}`,
+      })
+    } finally {
+      setIsSyncingFreeeHr(false)
+    }
+  }
+
   const fetchPeriodSales = useCallback(async (
     range?: { startDate: string; endDate: string }
   ): Promise<{ sales: SaleRecord[]; expenses: ExpenseRecord[] } | null> => {
@@ -1489,6 +1703,11 @@ export default function POSSystem() {
 
   useEffect(() => {
     if (mode !== 'tax') return
+    void fetchShifts()
+  }, [mode, fetchShifts])
+
+  useEffect(() => {
+    if (mode !== 'tax') return
     const yearFromPeriod = endDate.slice(0, 4)
     if (/^\d{4}$/.test(yearFromPeriod) && yearFromPeriod !== inventoryYear) {
       setInventoryYear(yearFromPeriod)
@@ -1596,11 +1815,37 @@ export default function POSSystem() {
     }
 
     setCart([])
+    await adjustInventoryBySale(cartSaleItems)
     await fetchTodaySales()
     setNotice({
       type: 'success',
       message: `会計を記帳しました（${formatYen(cartSummary.grossSales)} / ${cartSummary.itemCount}点）`,
     })
+  }
+
+  const adjustInventoryBySale = async (saleItems: SaleItem[]) => {
+    const targets = saleItems
+      .map((item) => {
+        const menu = menuItems.find((m) => m.id === item.id)
+        if (!menu || menu.stock_quantity == null) return null
+        return {
+          id: menu.id,
+          nextStock: Math.max(0, menu.stock_quantity - item.quantity),
+        }
+      })
+      .filter((x): x is { id: number; nextStock: number } => Boolean(x))
+
+    if (targets.length === 0) return
+
+    for (const target of targets) {
+      const { error } = await supabase.from('menu_items').update({ stock_quantity: target.nextStock }).eq('id', target.id)
+      if (error && !isMissingColumnError(error, 'stock_quantity')) {
+        setNotice({ type: 'error', message: `在庫更新に失敗しました: ${error.message}` })
+        return
+      }
+    }
+
+    await fetchMenuItems()
   }
 
   const deleteMenuItem = async (id: number) => {
@@ -1634,6 +1879,23 @@ export default function POSSystem() {
       return
     }
 
+    await fetchMenuItems()
+  }
+
+  const adjustSingleItemStock = async (id: number, delta: number) => {
+    const target = menuItems.find((item) => item.id === id)
+    if (!target || target.stock_quantity == null) return
+
+    const next = Math.max(0, target.stock_quantity + delta)
+    const { error } = await supabase.from('menu_items').update({ stock_quantity: next }).eq('id', id)
+    if (error) {
+      if (isMissingColumnError(error, 'stock_quantity')) {
+        setNotice({ type: 'error', message: '在庫カラムが未作成です。導入SQLを再実行してください。' })
+        return
+      }
+      setNotice({ type: 'error', message: `在庫更新に失敗しました: ${error.message}` })
+      return
+    }
     await fetchMenuItems()
   }
 
@@ -2118,6 +2380,10 @@ export default function POSSystem() {
 
     const trimmedName = newName.trim()
     const parsedPrice = Number(newPrice)
+    const parsedStockQuantity =
+      newStockQuantity.trim() === '' ? null : Math.max(0, Math.floor(Number(newStockQuantity)))
+    const parsedStockAlert =
+      newStockAlertThreshold.trim() === '' ? null : Math.max(0, Math.floor(Number(newStockAlertThreshold)))
 
     if (!trimmedName) {
       setNotice({ type: 'error', message: '商品名を入力してください。' })
@@ -2151,6 +2417,8 @@ export default function POSSystem() {
       image_url: imageUrl,
       only_takeout: newOnlyTakeout,
       only_eat_in: newOnlyEatIn,
+      stock_quantity: parsedStockQuantity,
+      stock_alert_threshold: parsedStockAlert,
     })
 
     if (isInvalidUuidError(error) && uuidShopId) {
@@ -2163,6 +2431,8 @@ export default function POSSystem() {
         image_url: imageUrl,
         only_takeout: newOnlyTakeout,
         only_eat_in: newOnlyEatIn,
+        stock_quantity: parsedStockQuantity,
+        stock_alert_threshold: parsedStockAlert,
       })
       error = retryWithUuid.error
     }
@@ -2173,7 +2443,9 @@ export default function POSSystem() {
         isMissingColumnError(error, 'shop_id') ||
         isMissingColumnError(error, 'tax_rate') ||
         isMissingColumnError(error, 'only_takeout') ||
-        isMissingColumnError(error, 'only_eat_in')
+        isMissingColumnError(error, 'only_eat_in') ||
+        isMissingColumnError(error, 'stock_quantity') ||
+        isMissingColumnError(error, 'stock_alert_threshold')
       )
     ) {
       const legacyPayload = {
@@ -2200,6 +2472,8 @@ export default function POSSystem() {
     setImagePreview(null)
     setNewOnlyTakeout(false)
     setNewOnlyEatIn(false)
+    setNewStockQuantity('')
+    setNewStockAlertThreshold('')
     await fetchMenuItems()
     setNotice({ type: 'success', message: '商品を登録しました。' })
   }
@@ -2286,6 +2560,51 @@ export default function POSSystem() {
     },
     []
   )
+
+  const runDemandForecast = async () => {
+    setIsForecasting(true)
+    try {
+      const dailySalesPayload = periodDailySummary.map((row) => ({
+        date: row.date,
+        grossSales: row.grossSales,
+      }))
+      const response = await fetch('/api/forecast/demand', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          dailySales: dailySalesPayload,
+          days: 7,
+          eventNote: forecastEventNote,
+        }),
+      })
+      const data = (await response.json()) as {
+        ok?: boolean
+        method?: string
+        forecast?: Array<{ date: string; expectedSales: number; factor: number }>
+        error?: string
+      }
+      if (!response.ok || !data.ok || !Array.isArray(data.forecast)) {
+        setNotice({ type: 'error', message: data.error ?? '需要予測に失敗しました。' })
+        return
+      }
+      setDemandForecast(data.forecast)
+      setNotice({
+        type: 'success',
+        message: `需要予測を実行しました（${data.method === 'prophet' ? 'Prophet' : 'フォールバック'}）。`,
+      })
+      void logAuditEvent('demand_forecast', 'forecast', undefined, {
+        method: data.method ?? 'unknown',
+        days: data.forecast.length,
+      })
+    } catch (error) {
+      setNotice({
+        type: 'error',
+        message: `需要予測に失敗しました: ${error instanceof Error ? error.message : 'unknown'}`,
+      })
+    } finally {
+      setIsForecasting(false)
+    }
+  }
 
   const runAutopilotWorkflow = useCallback(async () => {
     const range = getPreviousFiscalYearRange()
@@ -2614,6 +2933,73 @@ export default function POSSystem() {
     setNotice({ type: 'success', message: '経費JSONを出力しました。' })
   }
 
+  const syncExpensesToFreeeAutomatically = async () => {
+    if (isExportBlocked) {
+      setNotice({ type: 'error', message: `出力前に対応が必要です。${exportBlockerMessage}` })
+      return
+    }
+
+    const result = await queryPeriodExpenses()
+    if (!result.ok) {
+      setNotice({ type: 'error', message: '経費取得に失敗しました。期間と導入設定を確認してください。' })
+      return
+    }
+
+    const sourceExpenses = result.expenses
+    const sourceClassifications = classifyExpenses(sourceExpenses)
+    const exportableExpenses = sourceExpenses.filter((expense) => {
+      const c = sourceClassifications.find((item) => item.expenseId === expense.id)
+      return c?.rank === 'OK'
+    })
+
+    if (exportableExpenses.length === 0) {
+      setNotice({ type: 'error', message: 'freeeに送信できるOK経費がありません。' })
+      return
+    }
+
+    setIsSendingFreeeDeals(true)
+    try {
+      const response = await fetch('/api/freee/auto-expenses', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ expenses: exportableExpenses, limit: 100 }),
+      })
+      const data = (await response.json()) as {
+        ok?: boolean
+        success?: number
+        failed?: number
+        error?: string
+        accountItem?: string
+        taxCode?: number
+      }
+      if (!response.ok || !data.ok) {
+        setNotice({ type: 'error', message: data.error ?? 'freee自動連携に失敗しました。' })
+        return
+      }
+      setFreeeLastSendSummary({
+        success: data.success ?? 0,
+        failed: data.failed ?? 0,
+        total: (data.success ?? 0) + (data.failed ?? 0),
+        lastRunAt: new Date().toISOString(),
+      })
+      setNotice({
+        type: data.failed ? 'error' : 'success',
+        message: `freee自動連携: 成功 ${data.success ?? 0} 件 / 失敗 ${data.failed ?? 0} 件（勘定科目 ${data.accountItem ?? '-'} / 税区分 ${data.taxCode ?? '-'}）`,
+      })
+      void logAuditEvent('freee_auto_expenses_sync', 'expenses', undefined, {
+        success: data.success ?? 0,
+        failed: data.failed ?? 0,
+      })
+    } catch (error) {
+      setNotice({
+        type: 'error',
+        message: `freee自動連携に失敗しました: ${error instanceof Error ? error.message : 'unknown'}`,
+      })
+    } finally {
+      setIsSendingFreeeDeals(false)
+    }
+  }
+
   const exportPeriodPdf = async () => {
     if (periodSales.length === 0) {
       setNotice({ type: 'error', message: 'PDF出力する売上がありません。' })
@@ -2847,6 +3233,17 @@ export default function POSSystem() {
                           <p className="truncate font-bold text-slate-900">{item.name}</p>
                           <p className="text-lg font-black text-blue-700">{formatYen(line.total)}</p>
                           <p className="text-xs text-slate-500">税抜 {formatYen(item.price)}</p>
+                          {item.stock_quantity != null ? (
+                            <p
+                              className={`text-xs ${
+                                item.stock_alert_threshold != null && item.stock_quantity <= item.stock_alert_threshold
+                                  ? 'font-semibold text-red-600'
+                                  : 'text-slate-500'
+                              }`}
+                            >
+                              在庫: {item.stock_quantity}
+                            </p>
+                          ) : null}
                         </div>
                       </button>
                     )
@@ -3044,6 +3441,31 @@ export default function POSSystem() {
                   )}
                 </div>
 
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div>
+                    <label className="mb-1 block text-sm font-semibold">初期在庫（任意）</label>
+                    <input
+                      type="number"
+                      min={0}
+                      value={newStockQuantity}
+                      onChange={(event) => setNewStockQuantity(event.target.value)}
+                      className="w-full rounded-lg border border-slate-300 p-3"
+                      placeholder="例: 120"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-sm font-semibold">在庫アラート閾値（任意）</label>
+                    <input
+                      type="number"
+                      min={0}
+                      value={newStockAlertThreshold}
+                      onChange={(event) => setNewStockAlertThreshold(event.target.value)}
+                      className="w-full rounded-lg border border-slate-300 p-3"
+                      placeholder="例: 20"
+                    />
+                  </div>
+                </div>
+
                 <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
                   <p className="text-sm font-semibold">表示制限（任意）</p>
                   <div className="mt-2 flex flex-wrap gap-3">
@@ -3109,6 +3531,20 @@ export default function POSSystem() {
                         <div className="flex-1">
                           <p className="font-semibold text-slate-900">{item.name}</p>
                           <p className="text-sm text-slate-500">税抜 {formatYen(item.price)}</p>
+                          {item.stock_quantity != null ? (
+                            <p
+                              className={`text-xs ${
+                                item.stock_alert_threshold != null && item.stock_quantity <= item.stock_alert_threshold
+                                  ? 'font-semibold text-red-600'
+                                  : 'text-slate-500'
+                              }`}
+                            >
+                              在庫 {item.stock_quantity}
+                              {item.stock_alert_threshold != null ? ` / 閾値 ${item.stock_alert_threshold}` : ''}
+                            </p>
+                          ) : (
+                            <p className="text-xs text-slate-400">在庫未設定</p>
+                          )}
                         </div>
 
                         <button
@@ -3142,6 +3578,22 @@ export default function POSSystem() {
                         </button>
                         {!item.only_takeout && !item.only_eat_in && (
                           <span className="self-center text-xs text-slate-400">両モードで表示</span>
+                        )}
+                        {item.stock_quantity != null && (
+                          <div className="ml-auto flex items-center gap-2">
+                            <button
+                              onClick={() => void adjustSingleItemStock(item.id, -1)}
+                              className="rounded-md border border-slate-300 px-2 py-1 text-xs"
+                            >
+                              在庫-1
+                            </button>
+                            <button
+                              onClick={() => void adjustSingleItemStock(item.id, 1)}
+                              className="rounded-md border border-slate-300 px-2 py-1 text-xs"
+                            >
+                              在庫+1
+                            </button>
+                          </div>
                         )}
                       </div>
                     </div>
@@ -3671,8 +4123,198 @@ export default function POSSystem() {
                 <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
                   <h3 className="text-lg font-bold text-slate-900">店主向けモード（かんたん実行）</h3>
                   <p className="mt-1 text-sm text-slate-600">
-                    freee接続や個別設定は不要です。上の「税理士共有パックを作成して保存」を押せば、
-                    集計と判定を実行して提出用ファイルをまとめて出力します。
+                    基本は上の「税理士共有パックを作成して保存」だけで運用できます。
+                    freee連携や予測は必要なときだけ下の詳細カードで実行してください。
+                  </p>
+                </div>
+
+                <div className="rounded-xl border border-slate-200 p-4">
+                  <div className="flex items-center justify-between gap-2">
+                    <h3 className="text-lg font-bold text-slate-900">シフト管理（カレンダー）</h3>
+                    <button
+                      onClick={() => void fetchShifts()}
+                      className="rounded-md border border-slate-300 bg-white px-3 py-1 text-sm"
+                    >
+                      読み直し
+                    </button>
+                  </div>
+                  <p className="mt-1 text-sm text-slate-500">日付・勤務時間を入れると人件費を自動集計します。</p>
+                  <form onSubmit={handleSaveShift} className="mt-3 grid gap-2 sm:grid-cols-2">
+                    <input
+                      type="date"
+                      value={shiftDate}
+                      onChange={(event) => setShiftDate(event.target.value)}
+                      className="rounded-lg border border-slate-300 p-2 text-sm"
+                      required
+                    />
+                    <input
+                      type="text"
+                      value={shiftStaffName}
+                      onChange={(event) => setShiftStaffName(event.target.value)}
+                      placeholder="スタッフ名"
+                      className="rounded-lg border border-slate-300 p-2 text-sm"
+                      required
+                    />
+                    <input
+                      type="time"
+                      value={shiftStartTime}
+                      onChange={(event) => setShiftStartTime(event.target.value)}
+                      className="rounded-lg border border-slate-300 p-2 text-sm"
+                      required
+                    />
+                    <input
+                      type="time"
+                      value={shiftEndTime}
+                      onChange={(event) => setShiftEndTime(event.target.value)}
+                      className="rounded-lg border border-slate-300 p-2 text-sm"
+                      required
+                    />
+                    <input
+                      type="number"
+                      min={0}
+                      value={shiftHourlyWage}
+                      onChange={(event) => setShiftHourlyWage(event.target.value)}
+                      placeholder="時給"
+                      className="rounded-lg border border-slate-300 p-2 text-sm"
+                    />
+                    <input
+                      type="number"
+                      min={0}
+                      value={shiftBreakMinutes}
+                      onChange={(event) => setShiftBreakMinutes(event.target.value)}
+                      placeholder="休憩(分)"
+                      className="rounded-lg border border-slate-300 p-2 text-sm"
+                    />
+                    <div className="sm:col-span-2 grid grid-cols-2 gap-2">
+                      <button
+                        type="submit"
+                        disabled={isSavingShift}
+                        className="rounded-lg bg-slate-900 px-3 py-2 text-sm font-bold text-white disabled:bg-slate-400"
+                      >
+                        {isSavingShift ? '保存中...' : 'シフト保存'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={syncShiftsToFreeeHr}
+                        disabled={isSyncingFreeeHr || shifts.length === 0}
+                        className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold disabled:bg-slate-100"
+                      >
+                        {isSyncingFreeeHr ? '同期中...' : 'freee人事へ同期'}
+                      </button>
+                    </div>
+                  </form>
+                  <div className="mt-3 rounded-md bg-slate-50 px-3 py-2 text-sm">
+                    推定人件費（期間）: <span className="font-bold">{formatYen(shiftLaborTotal)}</span>
+                  </div>
+                  <div className="mt-2 max-h-32 overflow-y-auto rounded-md border border-slate-200">
+                    <table className="w-full text-xs">
+                      <thead className="sticky top-0 bg-slate-50">
+                        <tr>
+                          <th className="p-2 text-left">日付</th>
+                          <th className="p-2 text-left">氏名</th>
+                          <th className="p-2 text-right">人件費</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {isShiftLoading ? (
+                          <tr>
+                            <td className="p-2 text-slate-500" colSpan={3}>
+                              読み込み中...
+                            </td>
+                          </tr>
+                        ) : shifts.length === 0 ? (
+                          <tr>
+                            <td className="p-2 text-slate-500" colSpan={3}>
+                              この期間のシフトはありません。
+                            </td>
+                          </tr>
+                        ) : (
+                          shifts.slice(0, 12).map((shift) => {
+                            const labor = Math.floor(
+                              toShiftHours(shift.start_time, shift.end_time, shift.break_minutes) * shift.hourly_wage
+                            )
+                            return (
+                              <tr key={shift.id} className="border-t border-slate-100">
+                                <td className="p-2">{shift.shift_date}</td>
+                                <td className="p-2">{shift.staff_name}</td>
+                                <td className="p-2 text-right">{formatYen(labor)}</td>
+                              </tr>
+                            )
+                          })
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-slate-200 p-4">
+                  <h3 className="text-lg font-bold text-slate-900">需要予測（7日）</h3>
+                  <p className="mt-1 text-sm text-slate-500">
+                    過去売上から予測し、イベント情報（例: 浜松コンサート）で補正します。
+                  </p>
+                  <div className="mt-3 flex gap-2">
+                    <input
+                      type="text"
+                      value={forecastEventNote}
+                      onChange={(event) => setForecastEventNote(event.target.value)}
+                      placeholder="イベント情報（任意）"
+                      className="flex-1 rounded-lg border border-slate-300 p-2 text-sm"
+                    />
+                    <button
+                      onClick={runDemandForecast}
+                      disabled={isForecasting}
+                      className="rounded-lg bg-blue-600 px-3 py-2 text-sm font-bold text-white disabled:bg-slate-400"
+                    >
+                      {isForecasting ? '予測中...' : '予測する'}
+                    </button>
+                  </div>
+                  {demandForecast && demandForecast.length > 0 ? (
+                    <div className="mt-3 max-h-36 overflow-y-auto rounded-md border border-slate-200">
+                      <table className="w-full text-xs">
+                        <thead className="sticky top-0 bg-slate-50">
+                          <tr>
+                            <th className="p-2 text-left">日付</th>
+                            <th className="p-2 text-right">予測売上</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {demandForecast.map((point) => (
+                            <tr key={point.date} className="border-t border-slate-100">
+                              <td className="p-2">{point.date}</td>
+                              <td className="p-2 text-right">{formatYen(point.expectedSales)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : null}
+                </div>
+
+                <div className="rounded-xl border border-slate-200 p-4">
+                  <h3 className="text-lg font-bold text-slate-900">freee自動反映（経費）</h3>
+                  <p className="mt-1 text-sm text-slate-500">
+                    CSV/JSONダウンロードを省略し、OK判定の経費をfreeeへ直接ポストします。
+                  </p>
+                  <button
+                    onClick={syncExpensesToFreeeAutomatically}
+                    disabled={isSendingFreeeDeals}
+                    className="mt-3 w-full rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white disabled:bg-slate-400"
+                  >
+                    {isSendingFreeeDeals ? '送信中...' : 'freeeへ自動反映'}
+                  </button>
+                  {freeeLastSendSummary ? (
+                    <p className="mt-2 text-xs text-slate-500">
+                      前回: 成功 {freeeLastSendSummary.success} / 失敗 {freeeLastSendSummary.failed} / 合計{' '}
+                      {freeeLastSendSummary.total}
+                    </p>
+                  ) : null}
+                </div>
+
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                  <h3 className="text-base font-bold text-slate-900">プライバシーポリシー（運用）</h3>
+                  <p className="mt-1 text-xs text-slate-600">
+                    RLSで店舗分離、レシートは非公開Storage+署名URL、監査ログでアクセス記録。個人情報はLLM送信前にマスクします。
+                    詳細は docs/security を参照してください。
                   </p>
                 </div>
               </section>
