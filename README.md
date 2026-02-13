@@ -67,14 +67,6 @@ XERO_SHARED_REFRESH_TOKEN=...
 XERO_SHARED_TENANT_ID=...
 ```
 
-Optional for legacy endpoints only:
-
-```bash
-NEXT_PUBLIC_SUPABASE_URL=...
-NEXT_PUBLIC_SUPABASE_ANON_KEY=...
-SUPABASE_SERVICE_ROLE_KEY=...
-```
-
 ## Run
 
 ```bash
@@ -118,7 +110,7 @@ Legacy compatibility:
 - No receipt body/image in audit metadata logs.
 - Policy docs:
   - `docs/security/PRIVACY_POLICY_MINIMAL.md`
-  - `docs/security/RLS_AUDIT_STORAGE_HARDENING.sql` (legacy DB setups)
+- `docs/security/RLS_AUDIT_STORAGE_HARDENING.sql` (legacy DB setups only)
 
 ## PWA
 
