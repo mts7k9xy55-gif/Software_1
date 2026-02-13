@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { auth } from '@clerk/nextjs/server'
 import { classifyExpenses, type ClassifiedExpense, type ExpenseInput } from '@/lib/taxAutopilot'
 
 type ProviderName = 'ollama' | 'groq' | 'gemini'
@@ -49,6 +50,21 @@ function parseJsonObject(text: string): Record<string, unknown> | null {
     return null
   } catch {
     return null
+  }
+}
+
+function redactSensitiveText(text: string): string {
+  return text
+    .replace(/\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b/g, '[REDACTED_EMAIL]')
+    .replace(/\b\d{2,4}-\d{2,4}-\d{3,4}\b/g, '[REDACTED_PHONE]')
+    .replace(/\b\d{12,19}\b/g, '[REDACTED_NUMBER]')
+    .replace(/[0-9]{2,4}[-/][0-9]{1,2}[-/][0-9]{1,2}/g, '[REDACTED_DATE_IN_TEXT]')
+}
+
+function sanitizeExpenseForLlm(expense: ExpenseInput): ExpenseInput {
+  return {
+    ...expense,
+    description: redactSensitiveText(expense.description).slice(0, 160),
   }
 }
 
@@ -199,8 +215,9 @@ async function callGemini(expense: ExpenseInput): Promise<ProviderResult> {
 
 async function escalateReview(expense: ExpenseInput): Promise<ProviderResult | null> {
   const hasOllama = (process.env.ENABLE_OLLAMA ?? '1') !== '0'
-  const hasGroq = Boolean(process.env.GROQ_API_KEY)
-  const hasGemini = Boolean(process.env.GEMINI_API_KEY)
+  const allowExternalLlm = (process.env.ENABLE_EXTERNAL_LLM ?? '0') === '1'
+  const hasGroq = allowExternalLlm && Boolean(process.env.GROQ_API_KEY)
+  const hasGemini = allowExternalLlm && Boolean(process.env.GEMINI_API_KEY)
 
   const attempts: Array<() => Promise<ProviderResult>> = []
   if (hasOllama) attempts.push(() => callOllama(expense))
@@ -221,6 +238,11 @@ async function escalateReview(expense: ExpenseInput): Promise<ProviderResult | n
 
 export async function POST(request: NextRequest) {
   try {
+    const { userId } = auth()
+    if (!userId) {
+      return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 })
+    }
+
     const body = (await request.json()) as { expenses?: ExpenseInput[] }
     const expenses = Array.isArray(body.expenses) ? body.expenses : []
 
@@ -238,7 +260,8 @@ export async function POST(request: NextRequest) {
         continue
       }
 
-      const llm = await escalateReview(sourceExpense)
+      const sanitizedExpense = sanitizeExpenseForLlm(sourceExpense)
+      const llm = await escalateReview(sanitizedExpense)
       if (!llm) {
         merged.push(item)
         continue

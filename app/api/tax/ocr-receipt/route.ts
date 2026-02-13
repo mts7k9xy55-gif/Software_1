@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { auth } from '@clerk/nextjs/server'
 
 interface OcrExpense {
   expense_date: string
@@ -128,6 +129,18 @@ async function callGeminiReceiptOcr(dataUrl: string): Promise<OcrExpense> {
 
 export async function POST(request: NextRequest) {
   try {
+    const { userId } = auth()
+    if (!userId) {
+      return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 })
+    }
+
+    if ((process.env.ENABLE_RECEIPT_OCR ?? '0') !== '1') {
+      return NextResponse.json(
+        { ok: false, error: 'receipt ocr disabled (set ENABLE_RECEIPT_OCR=1)' },
+        { status: 403 }
+      )
+    }
+
     const body = (await request.json()) as { imageDataUrl?: string }
     const imageDataUrl = String(body.imageDataUrl ?? '')
     if (!imageDataUrl) {

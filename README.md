@@ -23,6 +23,8 @@ GEMINI_MODEL=gemini-2.5-flash-lite
 OLLAMA_BASE_URL=http://127.0.0.1:11434
 OLLAMA_MODEL=qwen3:8b
 ENABLE_OLLAMA=1
+ENABLE_EXTERNAL_LLM=0
+ENABLE_RECEIPT_OCR=0
 ```
 
 3. Clerkダッシュボードで認証方式（メール、Google等）を有効化

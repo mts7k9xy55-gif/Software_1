@@ -1218,6 +1218,39 @@ export default function POSSystem() {
       })
     }
 
+    if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
+      issues.push({
+        id: 'missing-supabase-service-role',
+        title: 'SUPABASE_SERVICE_ROLE_KEY が未設定です',
+        detail:
+          'レシートを非公開で運用するには、サーバーAPI経由アップロード用の service role key が必要です。',
+        actionLabel: '環境変数を追加',
+        actionBody: 'SUPABASE_SERVICE_ROLE_KEY=<your_service_role_key>',
+      })
+    }
+
+    if ((process.env.ENABLE_EXTERNAL_LLM ?? '0') === '1') {
+      issues.push({
+        id: 'external-llm-enabled',
+        title: '外部LLM送信が有効です',
+        detail:
+          '説明文をマスクして送信していますが、厳格運用では ENABLE_EXTERNAL_LLM=0（ローカルモデルのみ）を推奨します。',
+        actionLabel: '厳格設定',
+        actionBody: 'ENABLE_EXTERNAL_LLM=0',
+      })
+    }
+
+    if ((process.env.ENABLE_RECEIPT_OCR ?? '0') !== '1') {
+      issues.push({
+        id: 'receipt-ocr-disabled',
+        title: 'レシートOCRは無効です',
+        detail:
+          '画像を外部送信したくない安全設定です。必要な場合だけ ENABLE_RECEIPT_OCR=1 で有効化してください。',
+        actionLabel: '必要時のみ有効化',
+        actionBody: 'ENABLE_RECEIPT_OCR=1',
+      })
+    }
+
     // freee 連携は店主ワンタップ体験の範囲外なので、導入チェック対象から除外する。
 
     setSetupIssues(issues)
@@ -2378,7 +2411,7 @@ export default function POSSystem() {
       `summary-${startDate}-to-${endDate}.json`,
       JSON.stringify(
         {
-          shop: { id: activeShopId, name: shopName ?? null, email: user?.email ?? null },
+          shop: { id: activeShopId, name: shopName ?? null },
           period: { startDate, endDate },
           totals: {
             sales_gross: periodSummary.grossSales,
