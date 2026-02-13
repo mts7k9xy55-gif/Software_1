@@ -2,6 +2,7 @@ import './globals.css'
 import type { Metadata, Viewport } from 'next'
 import { Inter } from 'next/font/google'
 import { ClerkProvider } from '@clerk/nextjs'
+import Link from 'next/link'
 import PWARegister from '@/components/PWARegister'
 
 const inter = Inter({ subsets: ['latin'] })
@@ -41,7 +42,20 @@ export default function RootLayout({
       <body className={inter.className}>
         <ClerkProvider>
           <PWARegister />
-          {children}
+          <div className="min-h-screen">
+            {children}
+            <footer className="border-t border-slate-200 bg-white px-4 py-4 text-xs text-slate-600">
+              <div className="mx-auto flex w-full max-w-6xl flex-wrap items-center gap-3">
+                <span>© Tax man</span>
+                <Link href="/legal/privacy" className="font-semibold text-slate-700 hover:underline">
+                  Privacy Policy
+                </Link>
+                <Link href="/legal/terms" className="font-semibold text-slate-700 hover:underline">
+                  Terms and Conditions
+                </Link>
+              </div>
+            </footer>
+          </div>
         </ClerkProvider>
       </body>
     </html>
