@@ -246,7 +246,21 @@ create table if not exists public.inventory_adjustments (
 );
 
 create index if not exists idx_inventory_adjustments_shop_year
-  on public.inventory_adjustments(shop_id, fiscal_year);`
+  on public.inventory_adjustments(shop_id, fiscal_year);
+
+create table if not exists public.audit_logs (
+  id uuid primary key default gen_random_uuid(),
+  shop_id uuid not null references public.shops(id) on delete cascade,
+  actor_clerk_id text not null,
+  event_type text not null,
+  resource_type text not null,
+  resource_id text,
+  metadata jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists idx_audit_logs_shop_created
+  on public.audit_logs(shop_id, created_at desc);`
 
 const EXPENSE_BUCKET_SETUP_SQL = `insert into storage.buckets (id, name, public)
 values ('expense-receipts', 'expense-receipts', false)
@@ -731,6 +745,21 @@ export default function POSSystem() {
     [expenseClassificationSummary, isExportBlocked, periodSummary.transactionCount]
   )
 
+  const logAuditEvent = useCallback(
+    async (eventType: string, resourceType: string, resourceId?: string, metadata?: Record<string, unknown>) => {
+      try {
+        await fetch('/api/audit/log', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ eventType, resourceType, resourceId, metadata }),
+        })
+      } catch {
+        // audit failure should not block main workflow
+      }
+    },
+    []
+  )
+
   const visibleFreeeTaxes = useMemo(() => {
     if (showAllFreeeTaxes) return freeeTaxes
     const recommendedKeywords = ['課税仕入', '課税売上', '非課税', '不課税', '免税', '対象外']
@@ -1152,6 +1181,7 @@ export default function POSSystem() {
       { table: 'sales', select: 'id' },
       { table: 'expenses', select: 'id' },
       { table: 'inventory_adjustments', select: 'id' },
+      { table: 'audit_logs', select: 'id' },
     ]
 
     for (const check of tableChecks) {
@@ -1170,6 +1200,9 @@ export default function POSSystem() {
       }
 
       if (error.code === '42501') {
+        if (check.table === 'audit_logs') {
+          continue
+        }
         issues.push({
           id: `policy-${check.table}`,
           title: `権限不足: ${check.table}`,
@@ -1681,6 +1714,9 @@ export default function POSSystem() {
         setNotice({ type: 'error', message: data.error ?? 'レシートURLの生成に失敗しました。' })
         return
       }
+      void logAuditEvent('receipt_view_signed_url', 'expense_receipt', expenseId, {
+        hasSignedUrl: true,
+      })
       window.open(data.signedUrl, '_blank', 'noopener,noreferrer')
     } catch (error) {
       setNotice({
@@ -1780,6 +1816,7 @@ export default function POSSystem() {
       setSalesCsvFile(null)
       await fetchTodaySales()
       await fetchPeriodSales()
+      void logAuditEvent('sales_csv_import', 'sales', undefined, { importedCount: payload.length })
       setNotice({ type: 'success', message: `売上CSVを ${payload.length} 件取り込みました。` })
     } finally {
       setIsImportingSalesCsv(false)
@@ -1855,6 +1892,7 @@ export default function POSSystem() {
 
       setExpensesCsvFile(null)
       await fetchPeriodExpenses()
+      void logAuditEvent('expenses_csv_import', 'expenses', undefined, { importedCount: payload.length })
       setNotice({ type: 'success', message: `経費CSVを ${payload.length} 件取り込みました。` })
     } finally {
       setIsImportingExpensesCsv(false)
@@ -1900,6 +1938,9 @@ export default function POSSystem() {
       setExpenseAmount(String(data.expense.amount))
       setExpenseDescription(data.expense.description)
       setNotice({ type: 'success', message: data.message ?? '画像から経費候補を入力しました。' })
+      void logAuditEvent('receipt_ocr_autofill', 'expense_form', undefined, {
+        hasMerchant: Boolean(data.expense.merchant),
+      })
     } catch (error) {
       setNotice({
         type: 'error',
@@ -2475,6 +2516,10 @@ export default function POSSystem() {
       return
     }
     await downloadTaxPackZip()
+    void logAuditEvent('tax_pack_export_manual', 'tax_pack', `${startDate}_${endDate}`, {
+      readinessStatus: filingReadiness.status,
+      readinessScore: filingReadiness.score,
+    })
     setNotice({ type: 'success', message: '税理士共有パック（zip）を出力しました。' })
   }
 
@@ -2482,6 +2527,10 @@ export default function POSSystem() {
     const workflowResult = await runAutopilotWorkflow()
     if (!workflowResult || workflowResult.readiness.exportBlocked) return
     await downloadTaxPackZip()
+    void logAuditEvent('tax_pack_export_autopilot', 'tax_pack', `${startDate}_${endDate}`, {
+      readinessStatus: workflowResult.readiness.status,
+      readinessScore: workflowResult.readiness.score,
+    })
     setNotice({ type: 'success', message: '税理士共有パック（zip）を出力しました。' })
   }
 
