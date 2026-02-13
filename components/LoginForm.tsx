@@ -9,8 +9,8 @@ export default function LoginForm() {
   return (
     <div className="min-h-screen bg-slate-100 flex items-center justify-center p-4">
       <div className="w-full max-w-xl rounded-2xl border border-slate-200 bg-white p-6 shadow-lg md:p-8">
-        <h1 className="text-center text-2xl font-bold text-slate-900">売上記録システム</h1>
-        <p className="mt-1 text-center text-base text-slate-600">Clerkで認証してPOSを利用します</p>
+        <h1 className="text-center text-2xl font-bold text-slate-900">Global Filing Orchestrator</h1>
+        <p className="mt-1 text-center text-base text-slate-600">Clerkで認証して申告自動化ワークフローを利用します</p>
 
         <div className="mt-5 grid grid-cols-2 gap-2 rounded-lg bg-slate-100 p-1">
           <button

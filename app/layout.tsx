@@ -2,14 +2,13 @@ import './globals.css'
 import type { Metadata, Viewport } from 'next'
 import { Inter } from 'next/font/google'
 import { ClerkProvider } from '@clerk/nextjs'
-import { AuthProvider } from '@/lib/auth'
 import PWARegister from '@/components/PWARegister'
 
 const inter = Inter({ subsets: ['latin'] })
 
 export const metadata: Metadata = {
-  title: 'ALLGOAI POS',
-  description: 'Software eating the local',
+  title: 'ALLGOAI Filing Orchestrator',
+  description: 'Global filing automation with accountant-first review flow',
   manifest: '/manifest.json',
   icons: {
     icon: [
@@ -29,7 +28,7 @@ export const metadata: Metadata = {
 }
 
 export const viewport: Viewport = {
-  themeColor: '#0f172a',
+  themeColor: '#111827',
 }
 
 export default function RootLayout({
@@ -41,10 +40,8 @@ export default function RootLayout({
     <html lang="ja">
       <body className={inter.className}>
         <ClerkProvider>
-          <AuthProvider>
-            <PWARegister />
-            {children}
-          </AuthProvider>
+          <PWARegister />
+          {children}
         </ClerkProvider>
       </body>
     </html>

@@ -1,11 +1,12 @@
 'use client'
 
-import { useAuth } from '@/lib/auth'
-import POSSystem from '@/components/POSSystem'
+import { useUser } from '@clerk/nextjs'
+import FilingOrchestratorApp from '@/components/FilingOrchestratorApp'
 import LoginForm from '@/components/LoginForm'
 
 export default function Home() {
-  const { user, loading } = useAuth()
+  const { user, isLoaded } = useUser()
+  const loading = !isLoaded
 
   if (loading) {
     return (
@@ -22,5 +23,5 @@ export default function Home() {
     return <LoginForm />
   }
 
-  return <POSSystem />
+  return <FilingOrchestratorApp />
 }
