@@ -81,3 +81,10 @@ npm run dev
 
 - `docs/DESIGN_EXECUTION_PLAN_2026-02.md`: 設計を実装に落とすための運用計画
 - `docs/TAX_PACK_SPEC.md`: 申告パックの出力仕様とブロッキングポリシー
+
+## PWA
+
+- Manifest: `/public/manifest.json`
+- Service Worker: `/public/sw.js`
+- Offline fallback: `/public/offline.html`
+- Icons: `/public/icon-192.png`, `/public/icon-512.png`, `/public/apple-touch-icon.png`
