@@ -1,4 +1,5 @@
-.env.local
+.env*
+!.env.taxman.template
 node_modules
 .next
 .vercel
