@@ -791,8 +791,7 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
               <p className="text-3xl font-bold text-slate-900">{region.name}</p>
               <p className="mt-1 text-sm text-slate-600">
                 {region.code} / {region.currency} ・ {activeProviderStatus?.label ?? provider} ・
-                {activeProviderStatus?.connected ? ' 接続済み' : ' 未接続'} ・
-                {mode === 'tax_pro' ? ' 税理士主導' : ' 店舗主導'}
+                {activeProviderStatus?.connected ? ' 接続済み' : ' 未接続'}
               </p>
             </div>
 
