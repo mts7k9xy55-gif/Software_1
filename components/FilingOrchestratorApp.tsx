@@ -31,6 +31,14 @@ type LocalRecord = {
   posted?: PostingResult
 }
 
+type CsvImportRow = {
+  date: string
+  amount: number
+  description: string
+  counterparty?: string
+  direction: 'income' | 'expense'
+}
+
 type ProviderStatus = {
   provider: AccountingProvider
   label: string
@@ -102,6 +110,107 @@ function normalizeMode(input: string): OperationMode {
   return input === 'direct' ? 'direct' : 'tax_pro'
 }
 
+function parseCsvLine(line: string): string[] {
+  const cells: string[] = []
+  let current = ''
+  let inQuotes = false
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line[i]
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        current += '"'
+        i += 1
+      } else {
+        inQuotes = !inQuotes
+      }
+      continue
+    }
+    if (ch === ',' && !inQuotes) {
+      cells.push(current.trim())
+      current = ''
+      continue
+    }
+    current += ch
+  }
+  cells.push(current.trim())
+  return cells
+}
+
+function normalizeCsvHeader(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, '')
+}
+
+function normalizeCsvDate(value: string): string {
+  const text = String(value || '').trim()
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text
+  const parsed = new Date(text)
+  if (Number.isNaN(parsed.getTime())) return new Date().toISOString().slice(0, 10)
+  return parsed.toISOString().slice(0, 10)
+}
+
+function parseCurrencyNumber(raw: string): number {
+  const normalized = String(raw ?? '')
+    .replace(/[^\d.-]/g, '')
+    .trim()
+  const value = Number(normalized)
+  if (!Number.isFinite(value)) return 0
+  return Math.floor(Math.abs(value))
+}
+
+function pickHeaderIndex(headers: string[], candidates: string[]): number {
+  for (const candidate of candidates) {
+    const index = headers.findIndex((header) => header === candidate)
+    if (index >= 0) return index
+  }
+  return -1
+}
+
+function parseLedgerCsv(text: string): { rows: CsvImportRow[]; skipped: number } {
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+
+  if (lines.length < 2) return { rows: [], skipped: 0 }
+
+  const headers = parseCsvLine(lines[0]).map(normalizeCsvHeader)
+  const dateIndex = pickHeaderIndex(headers, ['date', 'occurred_at', '日付'])
+  const amountIndex = pickHeaderIndex(headers, ['amount', '金額'])
+  const descriptionIndex = pickHeaderIndex(headers, ['description', 'memo', '摘要', '内容', '用途'])
+  const counterpartyIndex = pickHeaderIndex(headers, ['counterparty', 'vendor', '取引先'])
+  const directionIndex = pickHeaderIndex(headers, ['direction', 'type', '区分'])
+
+  if (dateIndex < 0 || amountIndex < 0 || descriptionIndex < 0) return { rows: [], skipped: lines.length - 1 }
+
+  const rows: CsvImportRow[] = []
+  let skipped = 0
+
+  for (const line of lines.slice(1)) {
+    const cells = parseCsvLine(line)
+    const date = normalizeCsvDate(cells[dateIndex] ?? '')
+    const amount = parseCurrencyNumber(cells[amountIndex] ?? '')
+    const description = String(cells[descriptionIndex] ?? '').trim()
+    if (!description || amount <= 0) {
+      skipped += 1
+      continue
+    }
+
+    const directionRaw = String(cells[directionIndex] ?? '').toLowerCase()
+    const direction: 'income' | 'expense' =
+      /income|sale|revenue|売上|収入/.test(directionRaw) ? 'income' : 'expense'
+
+    rows.push({
+      date,
+      amount,
+      description: description.slice(0, 200),
+      counterparty: String(cells[counterpartyIndex] ?? '').trim().slice(0, 80),
+      direction,
+    })
+  }
+
+  return { rows, skipped }
+}
+
 export default function FilingOrchestratorApp({ region, onSwitchRegion }: FilingOrchestratorAppProps) {
   const { user } = useUser()
   const { signOut } = useClerk()
@@ -109,6 +218,7 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
   const [tab, setTab] = useState<TabKey>('transactions')
   const [notice, setNotice] = useState<Notice | null>(null)
   const [showSettings, setShowSettings] = useState(false)
+  const [showManualFallback, setShowManualFallback] = useState(false)
 
   const [mode, setMode] = useState<OperationMode>('tax_pro')
   const [status, setStatus] = useState<ConnectorStatus | null>(null)
@@ -119,6 +229,7 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
   const [isLoadingQueue, setIsLoadingQueue] = useState(false)
 
   const [receiptFile, setReceiptFile] = useState<File | null>(null)
+  const [ledgerCsvFile, setLedgerCsvFile] = useState<File | null>(null)
   const [manualDate, setManualDate] = useState<string>(new Date().toISOString().slice(0, 10))
   const [manualAmount, setManualAmount] = useState('')
   const [manualDescription, setManualDescription] = useState('')
@@ -126,6 +237,7 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
 
   const [isSubmittingOcr, setIsSubmittingOcr] = useState(false)
   const [isSubmittingManual, setIsSubmittingManual] = useState(false)
+  const [isSubmittingCsv, setIsSubmittingCsv] = useState(false)
   const [isPostingDraft, setIsPostingDraft] = useState(false)
 
   const provider = status?.provider ?? 'freee'
@@ -355,6 +467,82 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
     }
   }
 
+  const handleCsvImport = async () => {
+    if (!ledgerCsvFile) {
+      showApiNotice({
+        message: '帳簿CSVファイルを選択してください。',
+        diagnostic_code: 'LEDGER_CSV_REQUIRED',
+      })
+      return
+    }
+
+    setIsSubmittingCsv(true)
+    setNotice(null)
+
+    try {
+      const fileText = await ledgerCsvFile.text()
+      const { rows, skipped } = parseLedgerCsv(fileText)
+      if (rows.length === 0) {
+        showApiNotice({
+          message: 'CSVに有効な取引行がありません。',
+          diagnostic_code: 'LEDGER_CSV_INVALID',
+          next_action: 'date, amount, description列を含むCSVを使用してください。',
+        })
+        return
+      }
+
+      let success = 0
+      let failed = 0
+      let lastErrorCode = ''
+
+      for (const row of rows.slice(0, 200)) {
+        const response = await fetch('/api/intake/manual', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            date: row.date,
+            amount: row.amount,
+            description: row.description,
+            counterparty: row.counterparty,
+            direction: row.direction,
+            source_type: 'connector_api',
+            country_code: region.countryCode,
+          }),
+        })
+
+        const data = (await response.json()) as {
+          ok?: boolean
+          transaction?: CanonicalTransaction
+          decision?: ClassificationDecision
+          diagnostic_code?: string
+        }
+
+        if (response.ok && data.ok && data.transaction && data.decision) {
+          addRecord(data.transaction, data.decision)
+          success += 1
+        } else {
+          failed += 1
+          lastErrorCode = data.diagnostic_code ?? String(response.status)
+        }
+      }
+
+      setLedgerCsvFile(null)
+      setNotice({
+        type: failed === 0 ? 'success' : 'error',
+        message: `帳簿インポート完了: 成功 ${success} / 失敗 ${failed} / スキップ ${skipped}`,
+        code: lastErrorCode || undefined,
+        nextAction: rows.length > 200 ? '1回の取込は200件までです。残りは分割してください。' : undefined,
+      })
+    } catch (error) {
+      showApiNotice({
+        message: `帳簿インポートに失敗しました: ${error instanceof Error ? error.message : 'unknown'}`,
+        diagnostic_code: 'LEDGER_CSV_IMPORT_FAILED',
+      })
+    } finally {
+      setIsSubmittingCsv(false)
+    }
+  }
+
   const updateDecision = (transactionId: string, patch: Partial<ClassificationDecision>) => {
     setRecords((prev) =>
       prev.map((record) =>
@@ -517,7 +705,7 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
   }
 
   return (
-    <div className="min-h-screen bg-[radial-gradient(circle_at_0%_0%,#f8fafc_0%,#eef2ff_45%,#e2e8f0_100%)]">
+    <div className="min-h-screen bg-slate-50">
       <div className="mx-auto w-full max-w-6xl p-4 md:p-6">
         <header className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-xl">
           <div
@@ -556,7 +744,7 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
 
           {showSettings && (
             <div className="border-t border-slate-200 bg-slate-50 px-5 py-4 md:px-8">
-              <div className="grid gap-3 md:grid-cols-2">
+              <div className="grid gap-3 md:grid-cols-3">
                 <label className="text-sm font-semibold text-slate-700">
                   運用モード
                   <select
@@ -567,6 +755,16 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
                     <option value="tax_pro">Tax Pro（税理士主導）</option>
                     <option value="direct">Direct（店舗直販）</option>
                   </select>
+                </label>
+                <label className="rounded-lg border border-slate-200 bg-white p-3 text-sm font-semibold text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={showManualFallback}
+                    onChange={(event) => setShowManualFallback(event.target.checked)}
+                    className="mr-2 align-middle"
+                  />
+                  非常時のみ手入力フォームを表示
+                  <p className="mt-1 text-xs font-normal text-slate-500">通常運用では非表示のままにしてください。</p>
                 </label>
                 <div className="rounded-lg border border-slate-200 bg-white p-3 text-xs text-slate-600">
                   本サービスは税務判断を補助するツールです。最終判断・申告責任は税理士等の専門家にあります。
@@ -663,11 +861,31 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
                     {isSubmittingOcr ? '処理中...' : 'OCR取込して判定'}
                   </button>
                 </div>
+                <div className="mt-4 border-t border-slate-200 pt-4">
+                  <p className="text-sm font-semibold text-slate-900">デジタル帳簿インポート（CSV）</p>
+                  <p className="mt-1 text-xs text-slate-500">列名は `date, amount, description` を含めてください。最大200件/回。</p>
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <input
+                      type="file"
+                      accept=".csv,text/csv"
+                      onChange={(event) => setLedgerCsvFile(event.target.files?.[0] ?? null)}
+                      className="rounded-lg border border-slate-300 bg-white p-2 text-sm"
+                    />
+                    <button
+                      onClick={handleCsvImport}
+                      disabled={isSubmittingCsv}
+                      className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-bold text-white disabled:bg-slate-400"
+                    >
+                      {isSubmittingCsv ? '取込中...' : '帳簿をインポート'}
+                    </button>
+                  </div>
+                </div>
               </div>
 
-              <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              {showManualFallback && (
+                <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
                 <h2 className="text-lg font-bold text-slate-900">手入力取込</h2>
-                <p className="mt-1 text-sm text-slate-600">紙導入でも使える最小入力です。取込直後に判定します。</p>
+                <p className="mt-1 text-sm text-slate-600">非常時の代替入力です。通常はOCRまたは帳簿インポートを使ってください。</p>
 
                 <form onSubmit={handleManualIntake} className="mt-3 grid gap-3 md:grid-cols-2">
                   <input
@@ -709,7 +927,8 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
                     {isSubmittingManual ? '判定中...' : '手入力を判定キューへ追加'}
                   </button>
                 </form>
-              </div>
+                </div>
+              )}
 
               <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
                 <h2 className="text-lg font-bold text-slate-900">今回の取込結果</h2>
