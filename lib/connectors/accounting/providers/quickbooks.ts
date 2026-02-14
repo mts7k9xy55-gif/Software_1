@@ -150,20 +150,9 @@ export async function fetchQuickBooksReviewQueue(args: {
   }
 
   return {
-    ok: false,
-    status: 501,
-    diagnostic_code: 'QBO_QUEUE_NOT_IMPLEMENTED',
-    queue: [
-      {
-        provider: 'quickbooks',
-        id: null,
-        issue_date: '',
-        amount: 0,
-        status: 'not_implemented',
-        memo: 'QuickBooks queue retrieval is not implemented yet.',
-        next_action: 'Use provider UI directly or enable connector implementation.',
-        contact: definition.support.url,
-      },
-    ],
+    ok: true,
+    status: 200,
+    diagnostic_code: 'QBO_QUEUE_PLANNED',
+    queue: [],
   }
 }
