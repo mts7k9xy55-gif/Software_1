@@ -218,7 +218,6 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
 
   const [tab, setTab] = useState<TabKey>('transactions')
   const [notice, setNotice] = useState<Notice | null>(null)
-  const [showSettings, setShowSettings] = useState(false)
   const [showManualFallback, setShowManualFallback] = useState(false)
 
   const [mode, setMode] = useState<OperationMode>('tax_pro')
@@ -260,6 +259,11 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
   useEffect(() => {
     const saved = window.localStorage.getItem(MODE_STORAGE_KEY)
     if (saved) setMode(normalizeMode(saved))
+  }, [])
+
+  useEffect(() => {
+    const query = new URLSearchParams(window.location.search)
+    setShowManualFallback(query.get('manual') === '1')
   }, [])
 
   useEffect(() => {
@@ -723,12 +727,6 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
             </div>
             <div className="flex flex-wrap gap-2">
               <button
-                onClick={() => setShowSettings((prev) => !prev)}
-                className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700"
-              >
-                設定
-              </button>
-              <button
                 onClick={onSwitchRegion}
                 className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700"
               >
@@ -758,7 +756,7 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
                 tab === 'queue' ? 'bg-slate-900 text-white' : 'border border-slate-300 bg-white text-slate-700'
               }`}
             >
-              判定キュー
+              確認・送信
             </button>
             <button
               onClick={() => void refreshStatus()}
@@ -768,40 +766,9 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
               {isLoadingStatus ? '更新中...' : '状態更新'}
             </button>
             <span className="ml-auto rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
-              {region.code} / {region.currency} / {mode === 'tax_pro' ? 'Tax Pro' : 'Direct'}
+              {region.code} / {region.currency}
             </span>
           </div>
-
-          {showSettings && (
-            <div className="border-t border-slate-200 bg-slate-50 px-5 py-4 md:px-7">
-              <div className="grid gap-3 md:grid-cols-3">
-                <label className="text-sm font-semibold text-slate-700">
-                  運用モード
-                  <select
-                    value={mode}
-                    onChange={(event) => setMode(normalizeMode(event.target.value))}
-                    className="mt-1 w-full rounded-lg border border-slate-300 bg-white p-2"
-                  >
-                    <option value="tax_pro">Tax Pro（税理士主導）</option>
-                    <option value="direct">Direct（店舗直販）</option>
-                  </select>
-                </label>
-                <label className="rounded-lg border border-slate-200 bg-white p-3 text-sm font-semibold text-slate-700">
-                  <input
-                    type="checkbox"
-                    checked={showManualFallback}
-                    onChange={(event) => setShowManualFallback(event.target.checked)}
-                    className="mr-2 align-middle"
-                  />
-                  非常時のみ手入力フォームを表示
-                  <p className="mt-1 text-xs font-normal text-slate-500">通常は手入力を使わない運用です。</p>
-                </label>
-                <div className="rounded-lg border border-slate-200 bg-white p-3 text-xs text-slate-600">
-                  税務判断の最終責任は税理士等の専門家にあります。Tax manは判定補助と下書き作成を行います。
-                </div>
-              </div>
-            </div>
-          )}
 
           {notice && (
             <div
@@ -824,7 +791,8 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
               <p className="text-3xl font-bold text-slate-900">{region.name}</p>
               <p className="mt-1 text-sm text-slate-600">
                 {region.code} / {region.currency} ・ {activeProviderStatus?.label ?? provider} ・
-                {activeProviderStatus?.connected ? ' 接続済み' : ' 未接続'}
+                {activeProviderStatus?.connected ? ' 接続済み' : ' 未接続'} ・
+                {mode === 'tax_pro' ? ' 税理士主導' : ' 店舗主導'}
               </p>
             </div>
 
@@ -972,7 +940,7 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
                         disabled={isSubmittingManual}
                         className="md:col-span-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:bg-slate-400"
                       >
-                        {isSubmittingManual ? '判定中...' : '手入力を判定キューへ追加'}
+                        {isSubmittingManual ? '判定中...' : '手入力を確認一覧へ追加'}
                       </button>
                     </form>
                   </div>
@@ -986,7 +954,7 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
                     </div>
                     <div className="flex items-start gap-2">
                       <CheckCircle2 className="mt-0.5 h-4 w-4 text-emerald-600" />
-                      <p className="text-slate-700">判定キューでREVIEWだけ修正</p>
+                      <p className="text-slate-700">確認・送信で要確認だけ修正</p>
                     </div>
                     <div className="flex items-start gap-2">
                       <CheckCircle2 className="mt-0.5 h-4 w-4 text-emerald-600" />
@@ -1011,7 +979,7 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
             <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
-                  <h2 className="text-2xl font-bold text-slate-900">判定キュー</h2>
+                  <h2 className="text-2xl font-bold text-slate-900">確認・送信</h2>
                   <p className="text-sm text-slate-500">要確認だけ修正して、OKを会計へ下書き送信します。</p>
                 </div>
                 <div className="flex gap-2">
@@ -1034,7 +1002,7 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
             </div>
 
             <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-              <h3 className="text-base font-bold text-slate-900">ローカル判定結果</h3>
+              <h3 className="text-base font-bold text-slate-900">要確認一覧</h3>
               <div className="mt-3 space-y-3">
                 {records.length === 0 ? (
                   <p className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-500">まだ取り込まれた取引がありません。</p>
@@ -1125,7 +1093,7 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
             </div>
 
             <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-              <h3 className="text-base font-bold text-slate-900">会計下書きキュー</h3>
+              <h3 className="text-base font-bold text-slate-900">会計下書き一覧</h3>
               <div className="mt-3 max-h-72 overflow-y-auto rounded-lg border border-slate-200">
                 <table className="w-full text-sm">
                   <thead className="sticky top-0 bg-slate-50">
