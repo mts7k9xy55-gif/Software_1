@@ -52,7 +52,7 @@ export async function GET(request: NextRequest) {
     provider: routing.provider,
     diagnostic_code: fetched.diagnostic_code,
     queue: fetched.queue,
-    next_action: 'Review queued drafts in provider.',
+    next_action: 'Review Tax man-created drafts in provider.',
     contact: routing.definition.support.url,
   })
   if (routing.provider === 'freee') applyRefreshedFreeeCookies(response, fetched.freeeRefresh)

@@ -49,6 +49,8 @@ export interface FreeeReviewResult {
   refreshed: FreeeTokenResponse | null
 }
 
+const TAX_MAN_DRAFT_MARKER = '[Tax man]'
+
 function pickTaxCode(taxes: FreeeTax[]): number | null {
   const preferredRaw = ['purchase_with_tax_10', 'purchase_without_tax_10', 'purchase_with_tax_8']
   const byRaw = taxes.find((tax) => preferredRaw.includes(String(tax.name ?? '').trim()))
@@ -89,6 +91,15 @@ function mapStatusCodeToDiagnostic(status: number): string {
   if (status === 403) return 'FREEE_PERMISSION_DENIED'
   if (status >= 500) return 'FREEE_SERVER_ERROR'
   return 'FREEE_POST_FAILED'
+}
+
+function buildTaxManDraftDescription(command: PostingCommand): string {
+  const reason = String(command.decision.reason || command.transaction.memo_redacted || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 160)
+  const shortId = command.transaction.transaction_id.slice(0, 8)
+  return `${TAX_MAN_DRAFT_MARKER} tx:${shortId} ${reason}`.trim()
 }
 
 export function getFreeeStatus(cookieStore: ReadonlyRequestCookies): FreeeProviderStatus {
@@ -296,7 +307,7 @@ export async function postFreeeDrafts(args: {
       accountItemId,
       taxCode,
       amount: allocatedAmount,
-      description: command.decision.reason || command.transaction.memo_redacted,
+      description: buildTaxManDraftDescription(command),
     })
 
     if (posted.refreshed?.access_token) {
@@ -369,9 +380,12 @@ export async function fetchFreeeReviewQueue(args: {
     }
   }
 
-  const queue: ReviewQueueItem[] = fetched.deals.map((deal) => {
+  const queue: ReviewQueueItem[] = fetched.deals
+    .filter((deal) => String(deal.description ?? '').includes(TAX_MAN_DRAFT_MARKER))
+    .map((deal) => {
     const id = Number(deal.id ?? 0)
     const amount = Number(deal.amount ?? 0)
+    const memoSource = String(deal.description ?? deal.ref_number ?? '')
 
     return {
       provider: 'freee',
@@ -379,7 +393,7 @@ export async function fetchFreeeReviewQueue(args: {
       issue_date: String(deal.issue_date ?? ''),
       amount: Number.isFinite(amount) ? amount : 0,
       status: String(deal.status ?? deal.type ?? 'draft'),
-      memo: String(deal.description ?? deal.ref_number ?? '').slice(0, 120),
+      memo: memoSource.replace(TAX_MAN_DRAFT_MARKER, '').trim().slice(0, 120),
       next_action: 'Review and finalize in freee.',
       contact: definition.support.url,
     }

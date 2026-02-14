@@ -256,6 +256,8 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
     return { total: records.length, ok, review, ng }
   }, [records])
 
+  const reviewRecords = useMemo(() => records.filter((record) => record.decision.rank === 'REVIEW'), [records])
+
   useEffect(() => {
     const saved = window.localStorage.getItem(MODE_STORAGE_KEY)
     if (saved) setMode(normalizeMode(saved))
@@ -945,7 +947,7 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
                   </div>
                 )}
                 <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-                  <h3 className="text-base font-bold text-slate-900">運用ガイド</h3>
+                  <h3 className="text-base font-bold text-slate-900">この画面でやること</h3>
                   <div className="mt-3 space-y-3 text-sm">
                     <div className="flex items-start gap-2">
                       <CheckCircle2 className="mt-0.5 h-4 w-4 text-emerald-600" />
@@ -967,7 +969,9 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
             <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-5 text-sm text-emerald-900 shadow-sm">
               <div className="flex items-start gap-2">
                 <ShieldCheck className="mt-0.5 h-5 w-5" />
-                <p>税務判断の最終責任は税理士等の専門家にあります。Tax manは判定補助と下書き作成を行います。</p>
+                <p>
+                  この画面のアップロード処理では証憑画像を永続保存しません。最終税務判断の責任は税理士等の専門家にあります。
+                </p>
               </div>
             </div>
           </section>
@@ -987,26 +991,26 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
                     disabled={isLoadingQueue}
                     className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold disabled:bg-slate-100"
                   >
-                    {isLoadingQueue ? '取得中...' : '会計下書きを取得'}
+                    {isLoadingQueue ? '取得中...' : '連携先の下書きを同期'}
                   </button>
                   <button
                     onClick={postDrafts}
                     disabled={isPostingDraft || postableCommands.length === 0}
                     className="rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white disabled:bg-slate-400"
                   >
-                    {isPostingDraft ? '送信中...' : `OKを下書き送信 (${postableCommands.length})`}
+                    {isPostingDraft ? '送信中...' : `このアプリのOKを送信 (${postableCommands.length})`}
                   </button>
                 </div>
               </div>
             </div>
 
             <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-              <h3 className="text-base font-bold text-slate-900">要確認一覧</h3>
+              <h3 className="text-base font-bold text-slate-900">要確認一覧（REVIEWのみ）</h3>
               <div className="mt-3 space-y-3">
-                {records.length === 0 ? (
+                {reviewRecords.length === 0 ? (
                   <p className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-500">まだ取り込まれた取引がありません。</p>
                 ) : (
-                  records.map((record) => (
+                  reviewRecords.map((record) => (
                     <div key={record.transaction.transaction_id} className="rounded-xl border border-slate-200 p-3">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <p className="text-sm font-semibold text-slate-900">
@@ -1092,7 +1096,7 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
             </div>
 
             <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-              <h3 className="text-base font-bold text-slate-900">会計下書き一覧</h3>
+              <h3 className="text-base font-bold text-slate-900">会計下書き一覧（Tax man作成分）</h3>
               <div className="mt-3 max-h-72 overflow-y-auto rounded-lg border border-slate-200">
                 <table className="w-full text-sm">
                   <thead className="sticky top-0 bg-slate-50">
