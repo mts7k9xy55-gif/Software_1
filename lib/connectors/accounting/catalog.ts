@@ -17,7 +17,7 @@ export const ACCOUNTING_PROVIDER_DEFINITIONS: AccountingProviderDefinition[] = [
   {
     key: 'freee',
     label: 'freee',
-    regionCodes: ['JP'],
+    regionCodes: ['JP', 'GLOBAL'],
     support: {
       name: 'freee Support',
       url: 'https://support.freee.co.jp/hc/ja',
@@ -27,7 +27,7 @@ export const ACCOUNTING_PROVIDER_DEFINITIONS: AccountingProviderDefinition[] = [
   {
     key: 'quickbooks',
     label: 'QuickBooks Online',
-    regionCodes: ['US'],
+    regionCodes: ['US', 'GLOBAL'],
     support: {
       name: 'QuickBooks Support',
       url: 'https://quickbooks.intuit.com/learn-support/',
@@ -37,7 +37,7 @@ export const ACCOUNTING_PROVIDER_DEFINITIONS: AccountingProviderDefinition[] = [
   {
     key: 'xero',
     label: 'Xero',
-    regionCodes: ['EU', 'TH'],
+    regionCodes: ['EU', 'GLOBAL'],
     support: {
       name: 'Xero Support',
       url: 'https://central.xero.com/s/',

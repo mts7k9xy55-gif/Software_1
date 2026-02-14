@@ -1,4 +1,4 @@
-export type RegionCode = 'JP' | 'US' | 'EU' | 'TH'
+export type RegionCode = 'JP' | 'US' | 'EU' | 'GLOBAL'
 
 export type PlatformStatus = 'ready' | 'planned'
 
@@ -67,17 +67,20 @@ export const REGIONS: RegionDefinition[] = [
     ],
   },
   {
-    code: 'TH',
-    name: 'Thailand',
-    description: '紙導入から始める東南アジア展開向け。',
-    currency: 'THB',
-    countryCode: 'TH',
-    uxLabel: 'TH Filing UX',
-    accentFrom: '#ea580c',
+    code: 'GLOBAL',
+    name: 'Global',
+    description: '国ごとの税制差分を前提に、会計接続先を切り替える共通運用。',
+    currency: 'USD',
+    countryCode: 'GLOBAL',
+    uxLabel: 'Global Filing UX',
+    accentFrom: '#0ea5e9',
     accentTo: '#111827',
     platforms: [
+      { key: 'freee', name: 'freee', category: 'accounting', status: 'planned' },
+      { key: 'quickbooks', name: 'QuickBooks Online', category: 'accounting', status: 'planned' },
       { key: 'xero', name: 'Xero', category: 'accounting', status: 'planned' },
       { key: 'stripe', name: 'Stripe', category: 'payments', status: 'planned' },
+      { key: 'square', name: 'Square', category: 'pos', status: 'planned' },
     ],
   },
 ]
