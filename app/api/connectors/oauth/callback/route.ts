@@ -1,6 +1,5 @@
 import { cookies } from 'next/headers'
 import { NextRequest, NextResponse } from 'next/server'
-import { auth } from '@clerk/nextjs/server'
 
 import { getProviderDefinition } from '@/lib/connectors/accounting/catalog'
 import { resolveProvider } from '@/lib/connectors/accounting/router'
@@ -85,9 +84,6 @@ function setConnectorCookies(response: NextResponse, args: {
 }
 
 export async function GET(request: NextRequest) {
-  const { userId } = auth()
-  if (!userId) return NextResponse.json({ ok: false, diagnostic_code: 'AUTH_REQUIRED' }, { status: 401 })
-
   const requestedProvider = request.nextUrl.searchParams.get('provider')
   const region = request.nextUrl.searchParams.get('region')
   const inferredProvider =
