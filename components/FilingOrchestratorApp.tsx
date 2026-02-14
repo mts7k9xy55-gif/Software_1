@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { useClerk, useUser } from '@clerk/nextjs'
+import { CheckCircle2, FileSpreadsheet, Link2, ScanLine, ShieldCheck } from 'lucide-react'
 
 import type {
   AccountingProvider,
@@ -705,19 +706,18 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
   }
 
   return (
-    <div className="min-h-screen bg-[#f6f7fb]">
-      <div className="mx-auto w-full max-w-7xl p-4 md:p-6">
-        <header className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-          <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 px-5 py-5 md:px-7">
+    <div className="min-h-screen bg-[#f4f6fb]">
+      <div className="mx-auto w-full max-w-7xl space-y-5 p-4 md:p-6">
+        <header className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 px-5 py-4 md:px-7">
             <div className="flex items-center gap-3">
               <div
                 className="h-10 w-10 rounded-xl"
                 style={{ backgroundImage: `linear-gradient(135deg, ${region.accentFrom} 0%, ${region.accentTo} 100%)` }}
               />
               <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Tax man</p>
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Tax man</p>
                 <h1 className="text-2xl font-bold text-slate-900">{region.uxLabel}</h1>
-                <p className="text-sm text-slate-500">{region.description}</p>
               </div>
             </div>
             <div className="flex flex-wrap gap-2">
@@ -742,29 +742,37 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
             </div>
           </div>
 
-          <div className="grid gap-3 border-b border-slate-200 bg-white px-5 py-4 md:grid-cols-4 md:px-7">
-            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-              <p className="text-xs text-slate-500">ユーザー</p>
-              <p className="truncate text-sm font-semibold text-slate-800">{user?.primaryEmailAddress?.emailAddress ?? '-'}</p>
-            </div>
-            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-              <p className="text-xs text-slate-500">リージョン</p>
-              <p className="text-sm font-semibold text-slate-800">{region.code} / {region.currency}</p>
-            </div>
-            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-              <p className="text-xs text-slate-500">会計連携</p>
-              <p className={`text-sm font-semibold ${activeProviderStatus?.connected ? 'text-emerald-700' : 'text-red-700'}`}>
-                {activeProviderStatus?.label ?? provider} / {activeProviderStatus?.connected ? '接続済み' : '未接続'}
-              </p>
-            </div>
-            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-              <p className="text-xs text-slate-500">運用モード</p>
-              <p className="text-sm font-semibold text-slate-800">{mode === 'tax_pro' ? 'Tax Pro' : 'Direct'}</p>
-            </div>
+          <div className="flex flex-wrap items-center gap-2 px-5 py-3 md:px-7">
+            <button
+              onClick={() => setTab('transactions')}
+              className={`rounded-lg px-4 py-2 text-sm font-semibold ${
+                tab === 'transactions' ? 'bg-slate-900 text-white' : 'border border-slate-300 bg-white text-slate-700'
+              }`}
+            >
+              取引取込
+            </button>
+            <button
+              onClick={() => setTab('queue')}
+              className={`rounded-lg px-4 py-2 text-sm font-semibold ${
+                tab === 'queue' ? 'bg-slate-900 text-white' : 'border border-slate-300 bg-white text-slate-700'
+              }`}
+            >
+              判定キュー
+            </button>
+            <button
+              onClick={() => void refreshStatus()}
+              disabled={isLoadingStatus}
+              className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold disabled:bg-slate-100"
+            >
+              {isLoadingStatus ? '更新中...' : '状態更新'}
+            </button>
+            <span className="ml-auto rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
+              {region.code} / {region.currency} / {mode === 'tax_pro' ? 'Tax Pro' : 'Direct'}
+            </span>
           </div>
 
           {showSettings && (
-            <div className="border-b border-slate-200 bg-slate-50 px-5 py-4 md:px-7">
+            <div className="border-t border-slate-200 bg-slate-50 px-5 py-4 md:px-7">
               <div className="grid gap-3 md:grid-cols-3">
                 <label className="text-sm font-semibold text-slate-700">
                   運用モード
@@ -785,7 +793,7 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
                     className="mr-2 align-middle"
                   />
                   非常時のみ手入力フォームを表示
-                  <p className="mt-1 text-xs font-normal text-slate-500">通常画面には手入力を表示しません。</p>
+                  <p className="mt-1 text-xs font-normal text-slate-500">通常は手入力を使わない運用です。</p>
                 </label>
                 <div className="rounded-lg border border-slate-200 bg-white p-3 text-xs text-slate-600">
                   税務判断の最終責任は税理士等の専門家にあります。Tax manは判定補助と下書き作成を行います。
@@ -794,42 +802,10 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
             </div>
           )}
 
-          <div className="flex flex-wrap items-center gap-2 px-5 py-3 md:px-7">
-            <button
-              onClick={() => setTab('transactions')}
-              className={`rounded-lg px-4 py-2 text-sm font-semibold ${
-                tab === 'transactions'
-                  ? 'bg-slate-900 text-white'
-                  : 'border border-slate-300 bg-white text-slate-700'
-              }`}
-            >
-              取引取込
-            </button>
-            <button
-              onClick={() => setTab('queue')}
-              className={`rounded-lg px-4 py-2 text-sm font-semibold ${
-                tab === 'queue'
-                  ? 'bg-slate-900 text-white'
-                  : 'border border-slate-300 bg-white text-slate-700'
-              }`}
-            >
-              判定キュー
-            </button>
-            <button
-              onClick={() => void refreshStatus()}
-              disabled={isLoadingStatus}
-              className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold disabled:bg-slate-100"
-            >
-              {isLoadingStatus ? '更新中...' : '状態更新'}
-            </button>
-          </div>
-
           {notice && (
             <div
               className={`mx-5 mb-4 rounded-xl border px-4 py-3 text-sm md:mx-7 ${
-                notice.type === 'success'
-                  ? 'border-emerald-300 bg-emerald-50 text-emerald-800'
-                  : 'border-red-300 bg-red-50 text-red-800'
+                notice.type === 'success' ? 'border-emerald-300 bg-emerald-50 text-emerald-800' : 'border-red-300 bg-red-50 text-red-800'
               }`}
             >
               <p>{notice.message}</p>
@@ -841,169 +817,238 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
         </header>
 
         {tab === 'transactions' && (
-          <section className="mt-5 grid gap-4 xl:grid-cols-[1.5fr_1fr]">
-            <div className="space-y-4">
-              <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <h2 className="text-lg font-bold text-slate-900">レシート画像取込</h2>
-                    <p className="text-sm text-slate-500">カメラ撮影または画像選択で判定キューへ追加します。</p>
-                  </div>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={startProviderConnect}
-                      className="rounded-lg bg-blue-600 px-3 py-2 text-sm font-semibold text-white"
-                    >
-                      {activeProviderStatus?.label ?? provider}連携
-                    </button>
-                    <button
-                      onClick={() => void disconnectProvider()}
-                      className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold"
-                    >
-                      連携解除
-                    </button>
-                  </div>
+          <section className="space-y-4">
+            <div
+              className="rounded-2xl border border-slate-200 p-6 text-white shadow-sm"
+              style={{ backgroundImage: `linear-gradient(135deg, ${region.accentFrom} 0%, ${region.accentTo} 100%)` }}
+            >
+              <p className="text-xs font-semibold uppercase tracking-[0.14em] text-white/80">Smart Filing Flow</p>
+              <h2 className="mt-2 text-3xl font-bold">入力を最小化して、判定と下書き作成まで自動化</h2>
+              <p className="mt-2 max-w-3xl text-sm text-white/90">{region.description}</p>
+              <div className="mt-4 grid gap-3 md:grid-cols-4">
+                <div className="rounded-xl border border-white/25 bg-white/10 p-3">
+                  <p className="text-xs text-white/80">ユーザー</p>
+                  <p className="truncate text-sm font-semibold">{user?.primaryEmailAddress?.emailAddress ?? '-'}</p>
                 </div>
-                <div className="mt-3 flex flex-wrap items-center gap-2">
-                  <input
-                    type="file"
-                    accept="image/*"
-                    capture="environment"
-                    onChange={(event) => setReceiptFile(event.target.files?.[0] ?? null)}
-                    className="rounded-lg border border-slate-300 bg-white p-2 text-sm"
-                  />
-                  <button
-                    onClick={handleOcrIntake}
-                    disabled={isSubmittingOcr}
-                    className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:bg-slate-400"
-                  >
-                    {isSubmittingOcr ? '処理中...' : 'OCR取込して判定'}
-                  </button>
+                <div className="rounded-xl border border-white/25 bg-white/10 p-3">
+                  <p className="text-xs text-white/80">会計連携</p>
+                  <p className="text-sm font-semibold">{activeProviderStatus?.label ?? provider}</p>
+                </div>
+                <div className="rounded-xl border border-white/25 bg-white/10 p-3">
+                  <p className="text-xs text-white/80">接続状態</p>
+                  <p className="text-sm font-semibold">{activeProviderStatus?.connected ? '接続済み' : '未接続'}</p>
+                </div>
+                <div className="rounded-xl border border-white/25 bg-white/10 p-3">
+                  <p className="text-xs text-white/80">運用モード</p>
+                  <p className="text-sm font-semibold">{mode === 'tax_pro' ? 'Tax Pro' : 'Direct'}</p>
                 </div>
               </div>
-
-              <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-                <h2 className="text-lg font-bold text-slate-900">デジタル帳簿インポート</h2>
-                <p className="mt-1 text-sm text-slate-500">既存の会計/POS/帳簿CSVを読み込みます。`date, amount, description`列が必須です。</p>
-                <div className="mt-3 flex flex-wrap items-center gap-2">
-                  <input
-                    type="file"
-                    accept=".csv,text/csv"
-                    onChange={(event) => setLedgerCsvFile(event.target.files?.[0] ?? null)}
-                    className="rounded-lg border border-slate-300 bg-white p-2 text-sm"
-                  />
-                  <button
-                    onClick={handleCsvImport}
-                    disabled={isSubmittingCsv}
-                    className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:bg-slate-400"
-                  >
-                    {isSubmittingCsv ? '取込中...' : '帳簿をインポート'}
-                  </button>
-                </div>
-                <p className="mt-2 text-xs text-slate-500">1回の取込は最大200件です。証憑画像は永続保存しません。</p>
-              </div>
-
-              {showManualFallback && (
-                <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-                  <h2 className="text-lg font-bold text-slate-900">手入力（非常時オプション）</h2>
-                  <p className="mt-1 text-sm text-slate-500">通常運用では使わず、障害時のみ利用してください。</p>
-                  <form onSubmit={handleManualIntake} className="mt-3 grid gap-3 md:grid-cols-2">
-                    <input
-                      type="date"
-                      value={manualDate}
-                      onChange={(event) => setManualDate(event.target.value)}
-                      className="rounded-lg border border-slate-300 p-2"
-                      required
-                    />
-                    <input
-                      type="number"
-                      min={1}
-                      value={manualAmount}
-                      onChange={(event) => setManualAmount(event.target.value)}
-                      placeholder="金額"
-                      className="rounded-lg border border-slate-300 p-2"
-                      required
-                    />
-                    <input
-                      type="text"
-                      value={manualCounterparty}
-                      onChange={(event) => setManualCounterparty(event.target.value)}
-                      placeholder="取引先（任意）"
-                      className="rounded-lg border border-slate-300 p-2"
-                    />
-                    <input
-                      type="text"
-                      value={manualDescription}
-                      onChange={(event) => setManualDescription(event.target.value)}
-                      placeholder="用途・内容"
-                      className="rounded-lg border border-slate-300 p-2"
-                      required
-                    />
-                    <button
-                      type="submit"
-                      disabled={isSubmittingManual}
-                      className="md:col-span-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:bg-slate-400"
-                    >
-                      {isSubmittingManual ? '判定中...' : '手入力を判定キューへ追加'}
-                    </button>
-                  </form>
-                </div>
-              )}
             </div>
 
-            <aside className="space-y-4">
-              <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-                <h3 className="text-base font-bold text-slate-900">取込サマリー</h3>
-                <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-                    <p className="text-xs text-slate-500">Total</p>
-                    <p className="text-2xl font-bold text-slate-900">{summary.total}</p>
+            <div className="grid gap-4 md:grid-cols-4">
+              <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                <p className="text-xs text-slate-500">Total</p>
+                <p className="text-3xl font-bold text-slate-900">{summary.total}</p>
+              </div>
+              <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 shadow-sm">
+                <p className="text-xs text-emerald-700">OK</p>
+                <p className="text-3xl font-bold text-emerald-700">{summary.ok}</p>
+              </div>
+              <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 shadow-sm">
+                <p className="text-xs text-amber-700">REVIEW</p>
+                <p className="text-3xl font-bold text-amber-700">{summary.review}</p>
+              </div>
+              <div className="rounded-xl border border-red-200 bg-red-50 p-4 shadow-sm">
+                <p className="text-xs text-red-700">NG</p>
+                <p className="text-3xl font-bold text-red-700">{summary.ng}</p>
+              </div>
+            </div>
+
+            <div className="grid gap-4 xl:grid-cols-[1.5fr_1fr]">
+              <div className="space-y-4">
+                <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-start gap-3">
+                      <div className="mt-0.5 rounded-lg bg-blue-50 p-2 text-blue-600">
+                        <ScanLine className="h-5 w-5" />
+                      </div>
+                      <div>
+                        <h3 className="text-lg font-bold text-slate-900">1. レシート画像を取込</h3>
+                        <p className="text-sm text-slate-500">紙・レシート・領収書を撮影して判定キューへ追加します。</p>
+                      </div>
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={startProviderConnect}
+                        className="rounded-lg bg-blue-600 px-3 py-2 text-sm font-semibold text-white"
+                      >
+                        {activeProviderStatus?.label ?? provider}連携
+                      </button>
+                      <button
+                        onClick={() => void disconnectProvider()}
+                        className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold"
+                      >
+                        連携解除
+                      </button>
+                    </div>
                   </div>
-                  <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3">
-                    <p className="text-xs text-emerald-700">OK</p>
-                    <p className="text-2xl font-bold text-emerald-700">{summary.ok}</p>
-                  </div>
-                  <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
-                    <p className="text-xs text-amber-700">REVIEW</p>
-                    <p className="text-2xl font-bold text-amber-700">{summary.review}</p>
-                  </div>
-                  <div className="rounded-lg border border-red-200 bg-red-50 p-3">
-                    <p className="text-xs text-red-700">NG</p>
-                    <p className="text-2xl font-bold text-red-700">{summary.ng}</p>
+                  <div className="mt-4 flex flex-wrap items-center gap-2">
+                    <input
+                      type="file"
+                      accept="image/*"
+                      capture="environment"
+                      onChange={(event) => setReceiptFile(event.target.files?.[0] ?? null)}
+                      className="rounded-lg border border-slate-300 bg-white p-2 text-sm"
+                    />
+                    <button
+                      onClick={handleOcrIntake}
+                      disabled={isSubmittingOcr}
+                      className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:bg-slate-400"
+                    >
+                      {isSubmittingOcr ? '処理中...' : 'OCR取込して判定'}
+                    </button>
                   </div>
                 </div>
+
+                <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                  <div className="flex items-start gap-3">
+                    <div className="mt-0.5 rounded-lg bg-indigo-50 p-2 text-indigo-600">
+                      <FileSpreadsheet className="h-5 w-5" />
+                    </div>
+                    <div>
+                      <h3 className="text-lg font-bold text-slate-900">2. デジタル帳簿をインポート</h3>
+                      <p className="text-sm text-slate-500">会計ソフトやPOSから出したCSVを直接投入します。</p>
+                    </div>
+                  </div>
+                  <div className="mt-4 flex flex-wrap items-center gap-2">
+                    <input
+                      type="file"
+                      accept=".csv,text/csv"
+                      onChange={(event) => setLedgerCsvFile(event.target.files?.[0] ?? null)}
+                      className="rounded-lg border border-slate-300 bg-white p-2 text-sm"
+                    />
+                    <button
+                      onClick={handleCsvImport}
+                      disabled={isSubmittingCsv}
+                      className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white disabled:bg-slate-400"
+                    >
+                      {isSubmittingCsv ? '取込中...' : '帳簿をインポート'}
+                    </button>
+                  </div>
+                  <p className="mt-2 text-xs text-slate-500">最大200件/回。証憑画像は処理後に保持しません。</p>
+                </div>
+
+                {showManualFallback && (
+                  <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                    <h3 className="text-lg font-bold text-slate-900">手入力（非常時のみ）</h3>
+                    <form onSubmit={handleManualIntake} className="mt-3 grid gap-3 md:grid-cols-2">
+                      <input
+                        type="date"
+                        value={manualDate}
+                        onChange={(event) => setManualDate(event.target.value)}
+                        className="rounded-lg border border-slate-300 p-2"
+                        required
+                      />
+                      <input
+                        type="number"
+                        min={1}
+                        value={manualAmount}
+                        onChange={(event) => setManualAmount(event.target.value)}
+                        placeholder="金額"
+                        className="rounded-lg border border-slate-300 p-2"
+                        required
+                      />
+                      <input
+                        type="text"
+                        value={manualCounterparty}
+                        onChange={(event) => setManualCounterparty(event.target.value)}
+                        placeholder="取引先（任意）"
+                        className="rounded-lg border border-slate-300 p-2"
+                      />
+                      <input
+                        type="text"
+                        value={manualDescription}
+                        onChange={(event) => setManualDescription(event.target.value)}
+                        placeholder="用途・内容"
+                        className="rounded-lg border border-slate-300 p-2"
+                        required
+                      />
+                      <button
+                        type="submit"
+                        disabled={isSubmittingManual}
+                        className="md:col-span-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:bg-slate-400"
+                      >
+                        {isSubmittingManual ? '判定中...' : '手入力を判定キューへ追加'}
+                      </button>
+                    </form>
+                  </div>
+                )}
               </div>
 
-              <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-                <h3 className="text-base font-bold text-slate-900">地域プラットフォーム</h3>
-                <div className="mt-3 grid gap-2">
-                  {(status?.region?.platforms ?? region.platforms).map((platform) => (
-                    <div key={platform.key} className="flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm">
-                      <span className="font-semibold text-slate-800">{platform.name}</span>
-                      <span
-                        className={`rounded-full px-2 py-1 text-[11px] font-semibold ${
-                          platform.status === 'ready'
-                            ? 'bg-emerald-100 text-emerald-700'
-                            : 'bg-amber-100 text-amber-800'
-                        }`}
-                      >
-                        {platform.status === 'ready' ? 'Ready' : 'Planned'}
-                      </span>
+              <aside className="space-y-4">
+                <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                  <h3 className="text-base font-bold text-slate-900">運用ガイド</h3>
+                  <div className="mt-3 space-y-3 text-sm">
+                    <div className="flex items-start gap-2">
+                      <CheckCircle2 className="mt-0.5 h-4 w-4 text-emerald-600" />
+                      <p className="text-slate-700">まず画像かCSVのどちらかでデータを取込</p>
                     </div>
-                  ))}
+                    <div className="flex items-start gap-2">
+                      <CheckCircle2 className="mt-0.5 h-4 w-4 text-emerald-600" />
+                      <p className="text-slate-700">判定キューでREVIEWだけ修正</p>
+                    </div>
+                    <div className="flex items-start gap-2">
+                      <CheckCircle2 className="mt-0.5 h-4 w-4 text-emerald-600" />
+                      <p className="text-slate-700">OKのみを会計下書きへ一括送信</p>
+                    </div>
+                  </div>
                 </div>
-              </div>
-            </aside>
+
+                <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                  <h3 className="text-base font-bold text-slate-900">連携状態</h3>
+                  <div className="mt-3 space-y-2">
+                    <div className="flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                      <div className="flex items-center gap-2">
+                        <Link2 className="h-4 w-4 text-slate-500" />
+                        <p className="text-sm font-semibold text-slate-800">{activeProviderStatus?.label ?? provider}</p>
+                      </div>
+                      <p className={`text-sm font-semibold ${activeProviderStatus?.connected ? 'text-emerald-700' : 'text-red-700'}`}>
+                        {activeProviderStatus?.connected ? '接続済み' : '未接続'}
+                      </p>
+                    </div>
+                    {(status?.region?.platforms ?? region.platforms).map((platform) => (
+                      <div key={platform.key} className="flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm">
+                        <span className="font-semibold text-slate-800">{platform.name}</span>
+                        <span
+                          className={`rounded-full px-2 py-1 text-[11px] font-semibold ${
+                            platform.status === 'ready' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-800'
+                          }`}
+                        >
+                          {platform.status === 'ready' ? 'Ready' : 'Planned'}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-5 text-sm text-emerald-900 shadow-sm">
+                  <div className="flex items-start gap-2">
+                    <ShieldCheck className="mt-0.5 h-5 w-5" />
+                    <p>税務判断の最終責任は税理士等の専門家にあります。Tax manは判定補助と下書き作成を行います。</p>
+                  </div>
+                </div>
+              </aside>
+            </div>
           </section>
         )}
 
         {tab === 'queue' && (
-          <section className="mt-5 space-y-4">
+          <section className="space-y-4">
             <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-              <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
-                  <h2 className="text-lg font-bold text-slate-900">判定キュー</h2>
-                  <p className="text-sm text-slate-500">要確認だけ調整し、OKを会計へ下書き送信します。</p>
+                  <h2 className="text-2xl font-bold text-slate-900">判定キュー</h2>
+                  <p className="text-sm text-slate-500">要確認だけ修正して、OKを会計へ下書き送信します。</p>
                 </div>
                 <div className="flex gap-2">
                   <button
