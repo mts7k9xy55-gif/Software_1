@@ -705,45 +705,66 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
   }
 
   return (
-    <div className="min-h-screen bg-slate-50">
-      <div className="mx-auto w-full max-w-6xl p-4 md:p-6">
-        <header className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-xl">
-          <div
-            className="px-5 py-6 text-white md:px-8"
-            style={{ backgroundImage: `linear-gradient(135deg, ${region.accentFrom} 0%, ${region.accentTo} 100%)` }}
-          >
-            <div className="flex flex-wrap items-start justify-between gap-3">
+    <div className="min-h-screen bg-[#f6f7fb]">
+      <div className="mx-auto w-full max-w-7xl p-4 md:p-6">
+        <header className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 px-5 py-5 md:px-7">
+            <div className="flex items-center gap-3">
+              <div
+                className="h-10 w-10 rounded-xl"
+                style={{ backgroundImage: `linear-gradient(135deg, ${region.accentFrom} 0%, ${region.accentTo} 100%)` }}
+              />
               <div>
-                <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-white/80">Tax man</p>
-                <h1 className="mt-1 text-3xl font-black">{region.uxLabel}</h1>
-                <p className="mt-2 text-sm text-white/90">{region.description}</p>
-              </div>
-              <div className="flex gap-2">
-                <button
-                  onClick={() => setShowSettings((prev) => !prev)}
-                  className="rounded-xl border border-white/35 bg-white/10 px-3 py-2 text-sm font-semibold text-white hover:bg-white/20"
-                >
-                  設定
-                </button>
-                <button
-                  onClick={onSwitchRegion}
-                  className="rounded-xl border border-white/35 bg-white/10 px-3 py-2 text-sm font-semibold text-white hover:bg-white/20"
-                >
-                  地域変更
-                </button>
-                <button
-                  onClick={() => void signOut()}
-                  className="rounded-xl border border-white/35 bg-white/10 px-3 py-2 text-sm font-semibold text-white hover:bg-white/20"
-                >
-                  ログアウト
-                </button>
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Tax man</p>
+                <h1 className="text-2xl font-bold text-slate-900">{region.uxLabel}</h1>
+                <p className="text-sm text-slate-500">{region.description}</p>
               </div>
             </div>
-            <p className="mt-3 text-xs text-white/80">{user?.primaryEmailAddress?.emailAddress ?? ''}</p>
+            <div className="flex flex-wrap gap-2">
+              <button
+                onClick={() => setShowSettings((prev) => !prev)}
+                className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700"
+              >
+                設定
+              </button>
+              <button
+                onClick={onSwitchRegion}
+                className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700"
+              >
+                地域変更
+              </button>
+              <button
+                onClick={() => void signOut()}
+                className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700"
+              >
+                ログアウト
+              </button>
+            </div>
+          </div>
+
+          <div className="grid gap-3 border-b border-slate-200 bg-white px-5 py-4 md:grid-cols-4 md:px-7">
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <p className="text-xs text-slate-500">ユーザー</p>
+              <p className="truncate text-sm font-semibold text-slate-800">{user?.primaryEmailAddress?.emailAddress ?? '-'}</p>
+            </div>
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <p className="text-xs text-slate-500">リージョン</p>
+              <p className="text-sm font-semibold text-slate-800">{region.code} / {region.currency}</p>
+            </div>
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <p className="text-xs text-slate-500">会計連携</p>
+              <p className={`text-sm font-semibold ${activeProviderStatus?.connected ? 'text-emerald-700' : 'text-red-700'}`}>
+                {activeProviderStatus?.label ?? provider} / {activeProviderStatus?.connected ? '接続済み' : '未接続'}
+              </p>
+            </div>
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <p className="text-xs text-slate-500">運用モード</p>
+              <p className="text-sm font-semibold text-slate-800">{mode === 'tax_pro' ? 'Tax Pro' : 'Direct'}</p>
+            </div>
           </div>
 
           {showSettings && (
-            <div className="border-t border-slate-200 bg-slate-50 px-5 py-4 md:px-8">
+            <div className="border-b border-slate-200 bg-slate-50 px-5 py-4 md:px-7">
               <div className="grid gap-3 md:grid-cols-3">
                 <label className="text-sm font-semibold text-slate-700">
                   運用モード
@@ -764,19 +785,19 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
                     className="mr-2 align-middle"
                   />
                   非常時のみ手入力フォームを表示
-                  <p className="mt-1 text-xs font-normal text-slate-500">通常運用では非表示のままにしてください。</p>
+                  <p className="mt-1 text-xs font-normal text-slate-500">通常画面には手入力を表示しません。</p>
                 </label>
                 <div className="rounded-lg border border-slate-200 bg-white p-3 text-xs text-slate-600">
-                  本サービスは税務判断を補助するツールです。最終判断・申告責任は税理士等の専門家にあります。
+                  税務判断の最終責任は税理士等の専門家にあります。Tax manは判定補助と下書き作成を行います。
                 </div>
               </div>
             </div>
           )}
 
-          <div className="flex flex-wrap items-center gap-2 border-t border-slate-200 px-5 py-3 md:px-8">
+          <div className="flex flex-wrap items-center gap-2 px-5 py-3 md:px-7">
             <button
               onClick={() => setTab('transactions')}
-              className={`rounded-xl px-4 py-2 text-sm font-bold ${
+              className={`rounded-lg px-4 py-2 text-sm font-semibold ${
                 tab === 'transactions'
                   ? 'bg-slate-900 text-white'
                   : 'border border-slate-300 bg-white text-slate-700'
@@ -786,8 +807,10 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
             </button>
             <button
               onClick={() => setTab('queue')}
-              className={`rounded-xl px-4 py-2 text-sm font-bold ${
-                tab === 'queue' ? 'bg-slate-900 text-white' : 'border border-slate-300 bg-white text-slate-700'
+              className={`rounded-lg px-4 py-2 text-sm font-semibold ${
+                tab === 'queue'
+                  ? 'bg-slate-900 text-white'
+                  : 'border border-slate-300 bg-white text-slate-700'
               }`}
             >
               判定キュー
@@ -795,21 +818,15 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
             <button
               onClick={() => void refreshStatus()}
               disabled={isLoadingStatus}
-              className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold disabled:bg-slate-100"
+              className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold disabled:bg-slate-100"
             >
               {isLoadingStatus ? '更新中...' : '状態更新'}
             </button>
-            <span className="ml-auto rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
-              {region.code} / {region.currency} / {mode === 'tax_pro' ? 'Tax Pro' : 'Direct'}
-            </span>
-          </div>
-          <div className="border-t border-slate-200 bg-amber-50 px-5 py-2 text-xs text-amber-900 md:px-8">
-            税務判断の最終責任は税理士等の専門家にあります。Tax manは判定補助と下書き作成を行います。
           </div>
 
           {notice && (
             <div
-              className={`mx-5 mb-4 rounded-xl border px-3 py-2 text-sm md:mx-8 ${
+              className={`mx-5 mb-4 rounded-xl border px-4 py-3 text-sm md:mx-7 ${
                 notice.type === 'success'
                   ? 'border-emerald-300 bg-emerald-50 text-emerald-800'
                   : 'border-red-300 bg-red-50 text-red-800'
@@ -824,15 +841,18 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
         </header>
 
         {tab === 'transactions' && (
-          <section className="mt-4 grid gap-4 xl:grid-cols-[1.35fr_1fr]">
+          <section className="mt-5 grid gap-4 xl:grid-cols-[1.5fr_1fr]">
             <div className="space-y-4">
               <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <h2 className="text-lg font-bold text-slate-900">OCR取込</h2>
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h2 className="text-lg font-bold text-slate-900">レシート画像取込</h2>
+                    <p className="text-sm text-slate-500">カメラ撮影または画像選択で判定キューへ追加します。</p>
+                  </div>
                   <div className="flex gap-2">
                     <button
                       onClick={startProviderConnect}
-                      className="rounded-lg bg-blue-600 px-3 py-2 text-sm font-bold text-white"
+                      className="rounded-lg bg-blue-600 px-3 py-2 text-sm font-semibold text-white"
                     >
                       {activeProviderStatus?.label ?? provider}連携
                     </button>
@@ -844,7 +864,6 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
                     </button>
                   </div>
                 </div>
-                <p className="mt-1 text-sm text-slate-600">証憑は処理のためだけに使用し、サーバーには永続保存しません。</p>
                 <div className="mt-3 flex flex-wrap items-center gap-2">
                   <input
                     type="file"
@@ -856,109 +875,110 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
                   <button
                     onClick={handleOcrIntake}
                     disabled={isSubmittingOcr}
-                    className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-bold text-white disabled:bg-slate-400"
+                    className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:bg-slate-400"
                   >
                     {isSubmittingOcr ? '処理中...' : 'OCR取込して判定'}
                   </button>
                 </div>
-                <div className="mt-4 border-t border-slate-200 pt-4">
-                  <p className="text-sm font-semibold text-slate-900">デジタル帳簿インポート（CSV）</p>
-                  <p className="mt-1 text-xs text-slate-500">列名は `date, amount, description` を含めてください。最大200件/回。</p>
-                  <div className="mt-2 flex flex-wrap items-center gap-2">
-                    <input
-                      type="file"
-                      accept=".csv,text/csv"
-                      onChange={(event) => setLedgerCsvFile(event.target.files?.[0] ?? null)}
-                      className="rounded-lg border border-slate-300 bg-white p-2 text-sm"
-                    />
-                    <button
-                      onClick={handleCsvImport}
-                      disabled={isSubmittingCsv}
-                      className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-bold text-white disabled:bg-slate-400"
-                    >
-                      {isSubmittingCsv ? '取込中...' : '帳簿をインポート'}
-                    </button>
-                  </div>
+              </div>
+
+              <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                <h2 className="text-lg font-bold text-slate-900">デジタル帳簿インポート</h2>
+                <p className="mt-1 text-sm text-slate-500">既存の会計/POS/帳簿CSVを読み込みます。`date, amount, description`列が必須です。</p>
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <input
+                    type="file"
+                    accept=".csv,text/csv"
+                    onChange={(event) => setLedgerCsvFile(event.target.files?.[0] ?? null)}
+                    className="rounded-lg border border-slate-300 bg-white p-2 text-sm"
+                  />
+                  <button
+                    onClick={handleCsvImport}
+                    disabled={isSubmittingCsv}
+                    className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:bg-slate-400"
+                  >
+                    {isSubmittingCsv ? '取込中...' : '帳簿をインポート'}
+                  </button>
                 </div>
+                <p className="mt-2 text-xs text-slate-500">1回の取込は最大200件です。証憑画像は永続保存しません。</p>
               </div>
 
               {showManualFallback && (
                 <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-                <h2 className="text-lg font-bold text-slate-900">手入力取込</h2>
-                <p className="mt-1 text-sm text-slate-600">非常時の代替入力です。通常はOCRまたは帳簿インポートを使ってください。</p>
-
-                <form onSubmit={handleManualIntake} className="mt-3 grid gap-3 md:grid-cols-2">
-                  <input
-                    type="date"
-                    value={manualDate}
-                    onChange={(event) => setManualDate(event.target.value)}
-                    className="rounded-lg border border-slate-300 p-2"
-                    required
-                  />
-                  <input
-                    type="number"
-                    min={1}
-                    value={manualAmount}
-                    onChange={(event) => setManualAmount(event.target.value)}
-                    placeholder="金額"
-                    className="rounded-lg border border-slate-300 p-2"
-                    required
-                  />
-                  <input
-                    type="text"
-                    value={manualCounterparty}
-                    onChange={(event) => setManualCounterparty(event.target.value)}
-                    placeholder="取引先（任意）"
-                    className="rounded-lg border border-slate-300 p-2"
-                  />
-                  <input
-                    type="text"
-                    value={manualDescription}
-                    onChange={(event) => setManualDescription(event.target.value)}
-                    placeholder="用途・内容"
-                    className="rounded-lg border border-slate-300 p-2"
-                    required
-                  />
-                  <button
-                    type="submit"
-                    disabled={isSubmittingManual}
-                    className="md:col-span-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-bold text-white disabled:bg-slate-400"
-                  >
-                    {isSubmittingManual ? '判定中...' : '手入力を判定キューへ追加'}
-                  </button>
-                </form>
+                  <h2 className="text-lg font-bold text-slate-900">手入力（非常時オプション）</h2>
+                  <p className="mt-1 text-sm text-slate-500">通常運用では使わず、障害時のみ利用してください。</p>
+                  <form onSubmit={handleManualIntake} className="mt-3 grid gap-3 md:grid-cols-2">
+                    <input
+                      type="date"
+                      value={manualDate}
+                      onChange={(event) => setManualDate(event.target.value)}
+                      className="rounded-lg border border-slate-300 p-2"
+                      required
+                    />
+                    <input
+                      type="number"
+                      min={1}
+                      value={manualAmount}
+                      onChange={(event) => setManualAmount(event.target.value)}
+                      placeholder="金額"
+                      className="rounded-lg border border-slate-300 p-2"
+                      required
+                    />
+                    <input
+                      type="text"
+                      value={manualCounterparty}
+                      onChange={(event) => setManualCounterparty(event.target.value)}
+                      placeholder="取引先（任意）"
+                      className="rounded-lg border border-slate-300 p-2"
+                    />
+                    <input
+                      type="text"
+                      value={manualDescription}
+                      onChange={(event) => setManualDescription(event.target.value)}
+                      placeholder="用途・内容"
+                      className="rounded-lg border border-slate-300 p-2"
+                      required
+                    />
+                    <button
+                      type="submit"
+                      disabled={isSubmittingManual}
+                      className="md:col-span-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:bg-slate-400"
+                    >
+                      {isSubmittingManual ? '判定中...' : '手入力を判定キューへ追加'}
+                    </button>
+                  </form>
                 </div>
               )}
-
-              <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-                <h2 className="text-lg font-bold text-slate-900">今回の取込結果</h2>
-                <div className="mt-3 grid gap-2 sm:grid-cols-4">
-                  <div className="rounded-lg bg-slate-50 p-3 text-sm">
-                    <p className="text-xs text-slate-500">Total</p>
-                    <p className="text-xl font-black">{summary.total}</p>
-                  </div>
-                  <div className="rounded-lg bg-emerald-50 p-3 text-sm">
-                    <p className="text-xs text-slate-500">OK</p>
-                    <p className="text-xl font-black text-emerald-700">{summary.ok}</p>
-                  </div>
-                  <div className="rounded-lg bg-amber-50 p-3 text-sm">
-                    <p className="text-xs text-slate-500">Review</p>
-                    <p className="text-xl font-black text-amber-700">{summary.review}</p>
-                  </div>
-                  <div className="rounded-lg bg-red-50 p-3 text-sm">
-                    <p className="text-xs text-slate-500">NG</p>
-                    <p className="text-xl font-black text-red-700">{summary.ng}</p>
-                  </div>
-                </div>
-              </div>
             </div>
 
             <aside className="space-y-4">
               <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                <h3 className="text-base font-bold text-slate-900">取込サマリー</h3>
+                <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                    <p className="text-xs text-slate-500">Total</p>
+                    <p className="text-2xl font-bold text-slate-900">{summary.total}</p>
+                  </div>
+                  <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3">
+                    <p className="text-xs text-emerald-700">OK</p>
+                    <p className="text-2xl font-bold text-emerald-700">{summary.ok}</p>
+                  </div>
+                  <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
+                    <p className="text-xs text-amber-700">REVIEW</p>
+                    <p className="text-2xl font-bold text-amber-700">{summary.review}</p>
+                  </div>
+                  <div className="rounded-lg border border-red-200 bg-red-50 p-3">
+                    <p className="text-xs text-red-700">NG</p>
+                    <p className="text-2xl font-bold text-red-700">{summary.ng}</p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
                 <h3 className="text-base font-bold text-slate-900">地域プラットフォーム</h3>
                 <div className="mt-3 grid gap-2">
                   {(status?.region?.platforms ?? region.platforms).map((platform) => (
-                    <div key={platform.key} className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2 text-sm">
+                    <div key={platform.key} className="flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm">
                       <span className="font-semibold text-slate-800">{platform.name}</span>
                       <span
                         className={`rounded-full px-2 py-1 text-[11px] font-semibold ${
@@ -973,39 +993,18 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
                   ))}
                 </div>
               </div>
-
-              <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-                <h3 className="text-base font-bold text-slate-900">連携状態</h3>
-                <div className="mt-2 space-y-2 text-sm">
-                  <div className="flex justify-between rounded-md bg-slate-50 px-3 py-2">
-                    <span>会計</span>
-                    <span className={activeProviderStatus?.connected ? 'font-bold text-emerald-700' : 'font-bold text-red-700'}>
-                      {activeProviderStatus?.label ?? provider} / {activeProviderStatus?.connected ? '接続済み' : '未接続'}
-                    </span>
-                  </div>
-                  <div className="flex justify-between rounded-md bg-slate-50 px-3 py-2">
-                    <span>OCR</span>
-                    <span className={status?.ocr.enabled ? 'font-bold text-emerald-700' : 'font-bold text-amber-700'}>
-                      {status?.ocr.enabled ? '有効' : '無効'}
-                    </span>
-                  </div>
-                  <div className="flex justify-between rounded-md bg-slate-50 px-3 py-2">
-                    <span>接続方式</span>
-                    <span className="font-semibold text-slate-700">
-                      {activeProviderStatus?.mode === 'shared_token' ? '共通トークン' : 'ユーザーOAuth'}
-                    </span>
-                  </div>
-                </div>
-              </div>
             </aside>
           </section>
         )}
 
         {tab === 'queue' && (
-          <section className="mt-4 space-y-4">
+          <section className="mt-5 space-y-4">
             <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <h2 className="text-lg font-bold text-slate-900">判定キュー</h2>
+                <div>
+                  <h2 className="text-lg font-bold text-slate-900">判定キュー</h2>
+                  <p className="text-sm text-slate-500">要確認だけ調整し、OKを会計へ下書き送信します。</p>
+                </div>
                 <div className="flex gap-2">
                   <button
                     onClick={() => void refreshQueue()}
@@ -1017,16 +1016,19 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
                   <button
                     onClick={postDrafts}
                     disabled={isPostingDraft || postableCommands.length === 0}
-                    className="rounded-lg bg-emerald-600 px-3 py-2 text-sm font-bold text-white disabled:bg-slate-400"
+                    className="rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white disabled:bg-slate-400"
                   >
                     {isPostingDraft ? '送信中...' : `OKを下書き送信 (${postableCommands.length})`}
                   </button>
                 </div>
               </div>
+            </div>
 
+            <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <h3 className="text-base font-bold text-slate-900">ローカル判定結果</h3>
               <div className="mt-3 space-y-3">
                 {records.length === 0 ? (
-                  <p className="rounded-lg bg-slate-50 p-3 text-sm text-slate-500">まだ取り込まれた取引がありません。</p>
+                  <p className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-500">まだ取り込まれた取引がありません。</p>
                 ) : (
                   records.map((record) => (
                     <div key={record.transaction.transaction_id} className="rounded-xl border border-slate-200 p-3">
