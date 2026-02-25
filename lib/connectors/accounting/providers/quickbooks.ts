@@ -45,18 +45,40 @@ function readQuickBooksSession(cookieStore: ReadonlyRequestCookies): QuickBooksS
   }
 }
 
-function makeNotImplementedResults(commands: PostingCommand[]): ProviderDraftResult[] {
-  const definition = getProviderDefinition('quickbooks')
-  return commands.map((command) => ({
-    provider: 'quickbooks',
-    transaction_id: command.transaction.transaction_id,
-    ok: false,
-    status: 501,
-    diagnostic_code: 'QBO_POSTING_NOT_IMPLEMENTED',
-    message: 'QuickBooksへの下書き送信は現在準備中です。',
-    next_action: 'Enable QuickBooks posting endpoint or use CSV export fallback.',
-    contact: definition.support.url,
-  }))
+const QBO_BASE = 'https://quickbooks.api.intuit.com/v3/company'
+
+async function fetchQboExpenseAccount(accessToken: string, realmId: string): Promise<string | null> {
+  const query = encodeURIComponent("select * from Account where AccountType='Expense' MAXRESULTS 1")
+  const res = await fetch(`${QBO_BASE}/${realmId}/query?query=${query}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+    cache: 'no-store',
+  })
+  if (!res.ok) return null
+  const json = (await res.json()) as { QueryResponse?: { Account?: Array<{ Id?: string }> } }
+  return json.QueryResponse?.Account?.[0]?.Id ?? null
+}
+
+function buildPurchasePayload(
+  command: PostingCommand,
+  expenseAccountId: string
+): Record<string, unknown> {
+  const amount = Math.max(1, Math.floor(command.transaction.amount * command.decision.allocation_rate))
+  const desc = `[Tax man] ${command.transaction.memo_redacted}`.slice(0, 100)
+  return {
+    PaymentType: 'Cash',
+    AccountRef: { value: expenseAccountId },
+    TxnDate: command.decision.date,
+    Line: [
+      {
+        Amount: amount,
+        Description: desc,
+        DetailType: 'AccountBasedExpenseLineDetail',
+        AccountBasedExpenseLineDetail: {
+          AccountRef: { value: expenseAccountId },
+        },
+      },
+    ],
+  }
 }
 
 export function getQuickBooksStatus(cookieStore: ReadonlyRequestCookies): QuickBooksProviderStatus {
@@ -118,13 +140,54 @@ export async function postQuickBooksDrafts(args: {
     }
   }
 
-  const results = makeNotImplementedResults(args.commands)
+  const expenseAccountId = await fetchQboExpenseAccount(session.accessToken, session.realmId)
+  if (!expenseAccountId) {
+    const results: ProviderDraftResult[] = args.commands.map((command) => ({
+      provider: 'quickbooks',
+      transaction_id: command.transaction.transaction_id,
+      ok: false,
+      status: 400,
+      diagnostic_code: 'QBO_EXPENSE_ACCOUNT_NOT_FOUND',
+      message: 'QuickBooksに経費勘定がありません。',
+      next_action: 'Create an Expense account in QuickBooks and retry.',
+      contact: definition.support.url,
+    }))
+    return { ok: false, status: 400, diagnostic_code: 'QBO_EXPENSE_ACCOUNT_NOT_FOUND', success: 0, failed: results.length, results }
+  }
+
+  const results: ProviderDraftResult[] = []
+  for (const command of args.commands) {
+    const payload = buildPurchasePayload(command, expenseAccountId)
+    const res = await fetch(`${QBO_BASE}/${session.realmId}/purchase`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${session.accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ Purchase: payload }),
+      cache: 'no-store',
+    })
+    const body = (await res.json().catch(() => ({}))) as { Purchase?: { Id?: string } }
+    const remoteId = body.Purchase?.Id ?? null
+    results.push({
+      provider: 'quickbooks',
+      transaction_id: command.transaction.transaction_id,
+      ok: res.ok,
+      status: res.status,
+      remote_id: remoteId,
+      diagnostic_code: res.ok ? 'QBO_PURCHASE_CREATED' : 'QBO_POST_FAILED',
+      message: res.ok ? 'QuickBooksへ送信しました。' : `QuickBooks送信失敗: ${res.status}`,
+      next_action: res.ok ? 'Review in QuickBooks.' : 'Check QuickBooks setup and retry.',
+      contact: definition.support.url,
+    })
+  }
+  const success = results.filter((r) => r.ok).length
   return {
-    ok: false,
-    status: 501,
-    diagnostic_code: 'QBO_POSTING_NOT_IMPLEMENTED',
-    success: 0,
-    failed: results.length,
+    ok: success === results.length,
+    status: success === results.length ? 200 : 207,
+    diagnostic_code: success === results.length ? 'QBO_DRAFT_POSTED' : 'QBO_PARTIAL_FAILURE',
+    success,
+    failed: results.length - success,
     results,
   }
 }

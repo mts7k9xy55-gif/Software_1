@@ -47,7 +47,7 @@ export const REGIONS: RegionDefinition[] = [
     accentFrom: '#1d4ed8',
     accentTo: '#111827',
     platforms: [
-      { key: 'quickbooks', name: 'QuickBooks Online', category: 'accounting', status: 'planned' },
+      { key: 'quickbooks', name: 'QuickBooks Online', category: 'accounting', status: 'ready' },
       { key: 'stripe', name: 'Stripe', category: 'payments', status: 'planned' },
       { key: 'square', name: 'Square', category: 'pos', status: 'planned' },
     ],
@@ -62,7 +62,7 @@ export const REGIONS: RegionDefinition[] = [
     accentFrom: '#7c3aed',
     accentTo: '#111827',
     platforms: [
-      { key: 'xero', name: 'Xero', category: 'accounting', status: 'planned' },
+      { key: 'xero', name: 'Xero', category: 'accounting', status: 'ready' },
       { key: 'stripe', name: 'Stripe', category: 'payments', status: 'planned' },
     ],
   },
@@ -77,8 +77,8 @@ export const REGIONS: RegionDefinition[] = [
     accentTo: '#111827',
     platforms: [
       { key: 'freee', name: 'freee', category: 'accounting', status: 'planned' },
-      { key: 'quickbooks', name: 'QuickBooks Online', category: 'accounting', status: 'planned' },
-      { key: 'xero', name: 'Xero', category: 'accounting', status: 'planned' },
+      { key: 'quickbooks', name: 'QuickBooks Online', category: 'accounting', status: 'ready' },
+      { key: 'xero', name: 'Xero', category: 'accounting', status: 'ready' },
       { key: 'stripe', name: 'Stripe', category: 'payments', status: 'planned' },
       { key: 'square', name: 'Square', category: 'pos', status: 'planned' },
     ],

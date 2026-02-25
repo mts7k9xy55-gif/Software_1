@@ -15,6 +15,8 @@ import type {
   TenantContext,
 } from '@/lib/core/types'
 import type { RegionDefinition } from '@/lib/core/regions'
+import { useI18n } from '@/lib/I18nContext'
+import { formatMoney as formatMoneyI18n } from '@/lib/i18n'
 
 type TabKey = 'transactions' | 'queue'
 
@@ -87,13 +89,6 @@ type FilingOrchestratorAppProps = {
 
 const MODE_STORAGE_KEY = 'taxman:operation_mode'
 
-function formatMoney(value: number, currency: string): string {
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency,
-    maximumFractionDigits: 0,
-  }).format(Number.isFinite(value) ? value : 0)
-}
 
 async function fileToDataUrl(file: File): Promise<string> {
   return await new Promise((resolve, reject) => {
@@ -212,9 +207,14 @@ function parseLedgerCsv(text: string): { rows: CsvImportRow[]; skipped: number }
   return { rows, skipped }
 }
 
+function formatMoney(value: number, currency: string, locale?: 'ja' | 'en'): string {
+  return formatMoneyI18n(value, currency, locale)
+}
+
 export default function FilingOrchestratorApp({ region, onSwitchRegion }: FilingOrchestratorAppProps) {
   const { user } = useUser()
   const { signOut } = useClerk()
+  const { locale, setLocale, t } = useI18n()
 
   const [tab, setTab] = useState<TabKey>('transactions')
   const [notice, setNotice] = useState<Notice | null>(null)
@@ -227,6 +227,7 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
   const [records, setRecords] = useState<LocalRecord[]>([])
   const [reviewQueue, setReviewQueue] = useState<ReviewQueueItem[]>([])
   const [isLoadingQueue, setIsLoadingQueue] = useState(false)
+  const [isLoadingRecords, setIsLoadingRecords] = useState(false)
 
   const [receiptFile, setReceiptFile] = useState<File | null>(null)
   const [ledgerCsvFile, setLedgerCsvFile] = useState<File | null>(null)
@@ -239,6 +240,8 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
   const [isSubmittingManual, setIsSubmittingManual] = useState(false)
   const [isSubmittingCsv, setIsSubmittingCsv] = useState(false)
   const [isPostingDraft, setIsPostingDraft] = useState(false)
+  const [isAutoPosting, setIsAutoPosting] = useState(false)
+  const [isStripeSyncing, setIsStripeSyncing] = useState(false)
 
   const provider = status?.provider ?? 'freee'
   const activeProviderStatus = status?.provider_status
@@ -319,6 +322,30 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
     }
   }
 
+  const refreshRecords = async () => {
+    setIsLoadingRecords(true)
+    try {
+      const response = await fetch(
+        `/api/transactions/list?region=${region.code}&mode=${mode}&limit=200`,
+        { cache: 'no-store' }
+      )
+      const data = (await response.json()) as {
+        ok?: boolean
+        records?: LocalRecord[]
+        diagnostic_code?: string
+      }
+      if (response.ok && data.ok && Array.isArray(data.records)) {
+        setRecords(data.records)
+      } else {
+        setRecords([])
+      }
+    } catch {
+      setRecords([])
+    } finally {
+      setIsLoadingRecords(false)
+    }
+  }
+
   const refreshQueue = async () => {
     setIsLoadingQueue(true)
     try {
@@ -359,7 +386,7 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
 
   useEffect(() => {
     void refreshStatus()
-    setRecords([])
+    void refreshRecords()
     setReviewQueue([])
     setNotice(null)
   }, [region.code, mode])
@@ -711,6 +738,46 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
     }
   }
 
+  const runAutoPost = async () => {
+    setIsAutoPosting(true)
+    setNotice(null)
+    try {
+      const response = await fetch('/api/auto-post/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ region: region.code, mode, provider, min_confidence: 0.85 }),
+      })
+      const data = (await response.json()) as {
+        ok?: boolean
+        success?: number
+        failed?: number
+        results?: PostingResult[]
+        message?: string
+        diagnostic_code?: string
+      }
+      if (!response.ok || !data.ok) {
+        showApiNotice({
+          message: data.message ?? '自動送信に失敗しました。',
+          diagnostic_code: data.diagnostic_code ?? String(response.status),
+        })
+        return
+      }
+      setNotice({
+        type: (data.failed ?? 0) === 0 ? 'success' : 'error',
+        message: data.message ?? `自動送信: 成功 ${data.success ?? 0} / 失敗 ${data.failed ?? 0}`,
+      })
+      await refreshRecords()
+      await refreshQueue()
+    } catch (error) {
+      showApiNotice({
+        message: `自動送信に失敗しました: ${error instanceof Error ? error.message : 'unknown'}`,
+        diagnostic_code: 'AUTO_POST_FAILED',
+      })
+    } finally {
+      setIsAutoPosting(false)
+    }
+  }
+
   return (
     <div className="min-h-screen bg-[#f4f6fb]">
       <div className="mx-auto w-full max-w-7xl space-y-5 p-4 md:p-6">
@@ -723,22 +790,35 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
               />
               <div>
                 <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Tax man</p>
-                <h1 className="text-2xl font-bold text-slate-900">税務申告ワークフロー</h1>
+                <h1 className="text-2xl font-bold text-slate-900">{t('common', 'taxWorkflow')}</h1>
                 <p className="text-sm text-slate-500">{user?.primaryEmailAddress?.emailAddress ?? '-'}</p>
               </div>
             </div>
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="flex gap-1">
+                {(['ja', 'en'] as const).map((l) => (
+                  <button
+                    key={l}
+                    onClick={() => setLocale(l)}
+                    className={`rounded px-2 py-0.5 text-xs font-bold uppercase ${
+                      locale === l ? 'bg-slate-900 text-white' : 'bg-slate-200 text-slate-600 hover:bg-slate-300'
+                    }`}
+                  >
+                    {l}
+                  </button>
+                ))}
+              </span>
               <button
                 onClick={onSwitchRegion}
                 className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700"
               >
-                地域変更
+                {t('common', 'regionChange')}
               </button>
               <button
                 onClick={() => void signOut()}
                 className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700"
               >
-                ログアウト
+                {t('common', 'logout')}
               </button>
             </div>
           </div>
@@ -750,7 +830,7 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
                 tab === 'transactions' ? 'bg-slate-900 text-white' : 'border border-slate-300 bg-white text-slate-700'
               }`}
             >
-              取引取込
+              {t('common', 'transactions')}
             </button>
             <button
               onClick={() => setTab('queue')}
@@ -758,14 +838,14 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
                 tab === 'queue' ? 'bg-slate-900 text-white' : 'border border-slate-300 bg-white text-slate-700'
               }`}
             >
-              確認・送信
+              {t('common', 'reviewSend')}
             </button>
             <button
               onClick={() => void refreshStatus()}
               disabled={isLoadingStatus}
               className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold disabled:bg-slate-100"
             >
-              {isLoadingStatus ? '更新中...' : '状態更新'}
+              {isLoadingStatus ? '...' : t('common', 'statusUpdate')}
             </button>
             <span className="ml-auto rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
               {region.code} / {region.currency}
@@ -805,7 +885,7 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
               <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 shadow-sm">
                 <p className="text-sm text-emerald-700">合計金額（参考）</p>
                 <p className="text-3xl font-bold text-emerald-700">
-                  {formatMoney(records.reduce((acc, item) => acc + item.transaction.amount, 0), region.currency)}
+                  {formatMoney(records.reduce((acc, item) => acc + item.transaction.amount, 0), region.currency, locale)}
                 </p>
               </div>
               <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -839,6 +919,38 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
                           className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:bg-slate-400"
                         >
                           {isSubmittingOcr ? '処理中...' : '画像を解析'}
+                        </button>
+                      </div>
+                    </div>
+                    <div className="mt-3 rounded-xl border border-slate-200 p-4">
+                      <p className="text-sm font-semibold text-slate-700">Stripe決済同期</p>
+                      <div className="mt-2">
+                        <button
+                          onClick={async () => {
+                            setIsStripeSyncing(true)
+                            setNotice(null)
+                            try {
+                              const res = await fetch('/api/connectors/stripe/sync', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ region: region.code, limit: 50 }),
+                              })
+                              const data = (await res.json()) as { ok?: boolean; processed?: number; message?: string }
+                              setNotice({
+                                type: data.ok ? 'success' : 'error',
+                                message: data.message ?? (data.ok ? '同期完了' : '同期失敗'),
+                              })
+                              if (data.ok) await refreshRecords()
+                            } catch (e) {
+                              showApiNotice({ message: `Stripe同期失敗: ${e}`, diagnostic_code: 'STRIPE_SYNC_FAILED' })
+                            } finally {
+                              setIsStripeSyncing(false)
+                            }
+                          }}
+                          disabled={isStripeSyncing}
+                          className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 disabled:bg-slate-100"
+                        >
+                          {isStripeSyncing ? '同期中...' : 'Stripe取引を同期'}
                         </button>
                       </div>
                     </div>
@@ -998,7 +1110,14 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
                     disabled={isPostingDraft || postableCommands.length === 0}
                     className="rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white disabled:bg-slate-400"
                   >
-                    {isPostingDraft ? '送信中...' : `このアプリのOKを送信 (${postableCommands.length})`}
+                    {isPostingDraft ? t('common', 'sending') : `${t('common', 'sendDrafts')} (${postableCommands.length})`}
+                  </button>
+                  <button
+                    onClick={runAutoPost}
+                    disabled={isAutoPosting || !activeProviderStatus?.connected}
+                    className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 disabled:bg-slate-100"
+                  >
+                    {isAutoPosting ? t('common', 'autoSending') : t('common', 'autoSend')}
                   </button>
                 </div>
               </div>
@@ -1014,7 +1133,7 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
                     <div key={record.transaction.transaction_id} className="rounded-xl border border-slate-200 p-3">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <p className="text-sm font-semibold text-slate-900">
-                          {record.transaction.occurred_at} / {formatMoney(record.transaction.amount, region.currency)} / {record.transaction.memo_redacted}
+                          {record.transaction.occurred_at} / {formatMoney(record.transaction.amount, region.currency, locale)} / {record.transaction.memo_redacted}
                         </p>
                         <span
                           className={`rounded-full px-2 py-1 text-xs font-bold ${
@@ -1122,7 +1241,7 @@ export default function FilingOrchestratorApp({ region, onSwitchRegion }: Filing
                           <td className="p-2">{row.provider}</td>
                           <td className="p-2">{row.id ?? '-'}</td>
                           <td className="p-2">{row.issue_date || '-'}</td>
-                          <td className="p-2 text-right">{formatMoney(row.amount, row.currency ?? region.currency)}</td>
+                          <td className="p-2 text-right">{formatMoney(row.amount, row.currency ?? region.currency, locale)}</td>
                           <td className="p-2">{row.status || '-'}</td>
                           <td className="p-2">{row.memo || '-'}</td>
                         </tr>

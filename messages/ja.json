@@ -1,0 +1,17 @@
+{
+  "common": {
+    "regionChange": "地域変更",
+    "logout": "ログアウト",
+    "taxWorkflow": "税務申告ワークフロー",
+    "transactions": "取引取込",
+    "reviewSend": "確認・送信",
+    "statusUpdate": "状態更新",
+    "uploadReceipt": "レシート・帳簿をアップロード",
+    "manualEntry": "手入力",
+    "csvImport": "帳簿CSVインポート",
+    "sendDrafts": "このアプリのOKを送信",
+    "autoSend": "自動送信 (DB内の未送信OK)",
+    "sending": "送信中...",
+    "autoSending": "自動送信中..."
+  }
+}

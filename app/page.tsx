@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { useUser } from '@clerk/nextjs'
-import FilingOrchestratorApp from '@/components/FilingOrchestratorApp'
+import ExecutiveDashboard from '@/components/dashboard/ExecutiveDashboard'
 import LoginForm from '@/components/LoginForm'
 import DoorPage from '@/components/DoorPage'
 import { DEFAULT_REGION_CODE, getRegionDefinition, isRegionCode, type RegionCode } from '@/lib/core/regions'
@@ -54,5 +54,5 @@ export default function Home() {
     )
   }
 
-  return <FilingOrchestratorApp region={region} onSwitchRegion={() => setEntered(false)} />
+  return <ExecutiveDashboard region={region} onSwitchRegion={() => setEntered(false)} />
 }

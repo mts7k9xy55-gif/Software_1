@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { auth } from '@clerk/nextjs/server'
 
 import { extractExpenseByGeminiOcr } from '@/lib/connectors/ocr/gemini'
+import { persistTransaction } from '@/lib/db/transactions'
 import { emitAuditMeta, createAuditMeta } from '@/lib/core/audit'
 import { evaluateTransaction, redactSensitiveText } from '@/lib/core/decision'
 import { getJurisdictionProfile } from '@/lib/core/jurisdiction'
@@ -78,6 +79,12 @@ export async function POST(request: NextRequest) {
         model_version: decision.model_version,
       })
     )
+
+    try {
+      await persistTransaction(tenant, transaction, decision)
+    } catch (dbErr) {
+      console.warn('[intake/ocr-classify] persist failed:', dbErr)
+    }
 
     return NextResponse.json({
       ok: true,

@@ -18,6 +18,9 @@ const config = {
       },
     },
     extend: {
+      fontFamily: {
+        sans: ['var(--font-inter)', 'var(--font-noto)', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+      },
       colors: {
         border: "hsl(var(--border))",
         input: "hsl(var(--input))",
@@ -52,6 +55,15 @@ const config = {
           DEFAULT: "hsl(var(--card))",
           foreground: "hsl(var(--card-foreground))",
         },
+        buddy: {
+          green: "#22c55e",
+          dark: "#1a1a1a",
+          light: "#fafafa",
+        },
+        semantic: {
+          success: "#22c55e",
+          error: "#ef4444",
+        },
       },
       borderRadius: {
         lg: "var(--radius)",
@@ -59,6 +71,15 @@ const config = {
         sm: "calc(var(--radius) - 4px)",
       },
       keyframes: {
+        "pulse-subtle": {
+          "0%, 100%": { opacity: "1" },
+          "50%": { opacity: "0.7" },
+        },
+        celebrate: {
+          "0%": { opacity: "0", transform: "scale(0.9)" },
+          "50%": { opacity: "1", transform: "scale(1.02)" },
+          "100%": { opacity: "0", transform: "scale(1)" },
+        },
         "accordion-down": {
           from: { height: "0" },
           to: { height: "var(--radix-accordion-content-height)" },
@@ -69,6 +90,8 @@ const config = {
         },
       },
       animation: {
+        "pulse-subtle": "pulse-subtle 2s ease-in-out infinite",
+        celebrate: "celebrate 1.5s ease-out forwards",
         "accordion-down": "accordion-down 0.2s ease-out",
         "accordion-up": "accordion-up 0.2s ease-out",
       },

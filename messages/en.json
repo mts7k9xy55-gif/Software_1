@@ -1,0 +1,17 @@
+{
+  "common": {
+    "regionChange": "Change Region",
+    "logout": "Logout",
+    "taxWorkflow": "Tax Filing Workflow",
+    "transactions": "Transactions",
+    "reviewSend": "Review & Send",
+    "statusUpdate": "Update Status",
+    "uploadReceipt": "Upload Receipts & Ledger",
+    "manualEntry": "Manual Entry",
+    "csvImport": "Import Ledger CSV",
+    "sendDrafts": "Send OK to Accounting",
+    "autoSend": "Auto-send (unposted OK in DB)",
+    "sending": "Sending...",
+    "autoSending": "Auto-sending..."
+  }
+}

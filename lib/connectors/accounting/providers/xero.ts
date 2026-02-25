@@ -45,18 +45,41 @@ function readXeroSession(cookieStore: ReadonlyRequestCookies): XeroSession {
   }
 }
 
-function makeNotImplementedResults(commands: PostingCommand[]): ProviderDraftResult[] {
-  const definition = getProviderDefinition('xero')
-  return commands.map((command) => ({
-    provider: 'xero',
-    transaction_id: command.transaction.transaction_id,
-    ok: false,
-    status: 501,
-    diagnostic_code: 'XERO_POSTING_NOT_IMPLEMENTED',
-    message: 'Xeroへの下書き送信は現在準備中です。',
-    next_action: 'Enable Xero posting endpoint or use CSV export fallback.',
-    contact: definition.support.url,
-  }))
+const XERO_API = 'https://api.xero.com/api.xro/2.0'
+
+async function fetchXeroAccounts(accessToken: string, tenantId: string): Promise<{
+  bankAccountId: string | null
+  expenseAccountCode: string | null
+}> {
+  const res = await fetch(`${XERO_API}/Accounts`, {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Xero-Tenant-Id': tenantId,
+    },
+    cache: 'no-store',
+  })
+  if (!res.ok) return { bankAccountId: null, expenseAccountCode: null }
+  const json = (await res.json()) as { Accounts?: Array<{ AccountID?: string; Code?: string; Type?: string }> }
+  const accounts = json.Accounts ?? []
+  const bank = accounts.find((a) => a.Type === 'BANK')
+  const expense = accounts.find((a) => a.Type === 'EXPENSE')
+  return {
+    bankAccountId: bank?.AccountID ?? null,
+    expenseAccountCode: expense?.Code ?? '200',
+  }
+}
+
+async function fetchXeroDefaultContact(accessToken: string, tenantId: string): Promise<string | null> {
+  const res = await fetch(`${XERO_API}/Contacts?page=1&pageSize=1`, {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Xero-Tenant-Id': tenantId,
+    },
+    cache: 'no-store',
+  })
+  if (!res.ok) return null
+  const json = (await res.json()) as { Contacts?: Array<{ ContactID?: string }> }
+  return json.Contacts?.[0]?.ContactID ?? null
 }
 
 export function getXeroStatus(cookieStore: ReadonlyRequestCookies): XeroProviderStatus {
@@ -118,13 +141,85 @@ export async function postXeroDrafts(args: {
     }
   }
 
-  const results = makeNotImplementedResults(args.commands)
+  const { bankAccountId, expenseAccountCode } = await fetchXeroAccounts(session.accessToken, session.tenantId)
+  if (!bankAccountId) {
+    const results: ProviderDraftResult[] = args.commands.map((command) => ({
+      provider: 'xero',
+      transaction_id: command.transaction.transaction_id,
+      ok: false,
+      status: 400,
+      diagnostic_code: 'XERO_BANK_ACCOUNT_NOT_FOUND',
+      message: 'Xeroに銀行口座がありません。',
+      next_action: 'Add a bank account in Xero and retry.',
+      contact: definition.support.url,
+    }))
+    return { ok: false, status: 400, diagnostic_code: 'XERO_BANK_ACCOUNT_NOT_FOUND', success: 0, failed: results.length, results }
+  }
+
+  const contactId = await fetchXeroDefaultContact(session.accessToken, session.tenantId)
+  if (!contactId) {
+    const results: ProviderDraftResult[] = args.commands.map((command) => ({
+      provider: 'xero',
+      transaction_id: command.transaction.transaction_id,
+      ok: false,
+      status: 400,
+      diagnostic_code: 'XERO_CONTACT_NOT_FOUND',
+      message: 'Xeroに取引先がありません。',
+      next_action: 'Add a supplier contact in Xero and retry.',
+      contact: definition.support.url,
+    }))
+    return { ok: false, status: 400, diagnostic_code: 'XERO_CONTACT_NOT_FOUND', success: 0, failed: results.length, results }
+  }
+
+  const results: ProviderDraftResult[] = []
+  for (const command of args.commands) {
+    const amount = Math.max(0.01, (command.transaction.amount * command.decision.allocation_rate) / 1)
+    const desc = `[Tax man] ${command.transaction.memo_redacted}`.slice(0, 100)
+    const payload = {
+      Type: 'SPEND',
+      Contact: { ContactID: contactId },
+      BankAccount: { AccountID: bankAccountId },
+      LineAmountTypes: 'Exclusive',
+      LineItems: [
+        {
+          Description: desc,
+          UnitAmount: amount.toFixed(2),
+          TaxType: 'NONE',
+          AccountCode: expenseAccountCode,
+        },
+      ],
+    }
+    const res = await fetch(`${XERO_API}/BankTransactions`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${session.accessToken}`,
+        'Xero-Tenant-Id': session.tenantId,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+      cache: 'no-store',
+    })
+    const body = (await res.json().catch(() => ({}))) as { BankTransactions?: Array<{ BankTransactionID?: string }> }
+    const remoteId = body.BankTransactions?.[0]?.BankTransactionID ?? null
+    results.push({
+      provider: 'xero',
+      transaction_id: command.transaction.transaction_id,
+      ok: res.ok,
+      status: res.status,
+      remote_id: remoteId,
+      diagnostic_code: res.ok ? 'XERO_BANK_TX_CREATED' : 'XERO_POST_FAILED',
+      message: res.ok ? 'Xeroへ送信しました。' : `Xero送信失敗: ${res.status}`,
+      next_action: res.ok ? 'Review in Xero.' : 'Check Xero setup and retry.',
+      contact: definition.support.url,
+    })
+  }
+  const success = results.filter((r) => r.ok).length
   return {
-    ok: false,
-    status: 501,
-    diagnostic_code: 'XERO_POSTING_NOT_IMPLEMENTED',
-    success: 0,
-    failed: results.length,
+    ok: success === results.length,
+    status: success === results.length ? 200 : 207,
+    diagnostic_code: success === results.length ? 'XERO_DRAFT_POSTED' : 'XERO_PARTIAL_FAILURE',
+    success,
+    failed: results.length - success,
     results,
   }
 }

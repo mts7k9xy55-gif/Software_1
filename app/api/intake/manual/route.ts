@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { auth } from '@clerk/nextjs/server'
 
+import { persistTransaction } from '@/lib/db/transactions'
 import { emitAuditMeta, createAuditMeta } from '@/lib/core/audit'
 import { evaluateTransaction, redactSensitiveText } from '@/lib/core/decision'
 import { getJurisdictionProfile } from '@/lib/core/jurisdiction'
@@ -83,6 +84,13 @@ export async function POST(request: NextRequest) {
         model_version: decision.model_version,
       })
     )
+
+    try {
+      await persistTransaction(tenant, transaction, decision)
+    } catch (dbErr) {
+      // Log but do not fail: allow operation when Supabase is not configured
+      console.warn('[intake/manual] persist failed:', dbErr)
+    }
 
     return NextResponse.json({ ok: true, transaction, decision, diagnostic_code: 'INTAKE_MANUAL_CLASSIFIED' })
   } catch (error) {

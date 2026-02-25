@@ -4,6 +4,7 @@ import { auth } from '@clerk/nextjs/server'
 
 import { applyRefreshedFreeeCookies } from '@/lib/connectors/freee'
 import { postDraftsByProvider, resolveProvider } from '@/lib/connectors/accounting/router'
+import { updatePostingResult } from '@/lib/db/transactions'
 import { createAuditMeta, emitAuditMeta } from '@/lib/core/audit'
 import { resolveTenantContext } from '@/lib/core/tenant'
 import type { PostingCommand } from '@/lib/core/types'
@@ -57,6 +58,19 @@ export async function POST(request: NextRequest) {
       rule_version: commands[0]?.decision?.rule_version,
     })
   )
+
+  for (const result of posted.results ?? []) {
+    if (result.ok) {
+      try {
+        await updatePostingResult(tenant, result.transaction_id, {
+          ...result,
+          provider: result.provider ?? routing.provider,
+        })
+      } catch (dbErr) {
+        console.warn('[posting/draft] updatePostingResult failed:', dbErr)
+      }
+    }
+  }
 
   const response = NextResponse.json(
     {
