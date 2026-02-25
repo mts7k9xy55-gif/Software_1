@@ -1,0 +1,279 @@
+{
+  "industries": [
+    {
+      "id": "care",
+      "name": "介護",
+      "market_size_trillion_yen": 33,
+      "growth_rate": 0.068,
+      "small_business_ratio": 0.65,
+      "description": "高齢化社会における急速な需要増加。2025年33兆円、2050年77兆円目標。",
+      "ai_adoption_rate": 0.10,
+      "key_challenges": [
+        "介護記録の手作業",
+        "夜間巡回の負担",
+        "移乗支援の身体的負担",
+        "シフト管理の複雑さ"
+      ],
+      "ai_solutions": [
+        "音声入力による記録自動化",
+        "見守りセンサー・カメラ",
+        "移乗支援ロボット",
+        "需要予測によるシフト最適化"
+      ]
+    },
+    {
+      "id": "beauty",
+      "name": "美容院",
+      "market_size_trillion_yen": 2.7,
+      "growth_rate": 0.006,
+      "small_business_ratio": 0.72,
+      "description": "個人経営・小規模サロンが大多数。2025年2.7兆円。",
+      "ai_adoption_rate": 0.08,
+      "key_challenges": [
+        "予約管理の非効率性",
+        "隙間時間の活用不足",
+        "在庫管理の手作業",
+        "顧客分析の不足"
+      ],
+      "ai_solutions": [
+        "24時間自動予約システム",
+        "3Dヘアスタイルシミュレーション",
+        "在庫自動発注",
+        "顧客分析・リマインド"
+      ]
+    },
+    {
+      "id": "food",
+      "name": "飲食店",
+      "market_size_trillion_yen": 35,
+      "growth_rate": 0.03,
+      "small_business_ratio": 0.58,
+      "description": "外食産業全体で35兆円。小規模店舗のIT化が遅れている。",
+      "ai_adoption_rate": 0.12,
+      "key_challenges": [
+        "廃棄ロスの増加",
+        "需要予測の不正確性",
+        "シフト管理の複雑さ",
+        "顧客体験の差別化"
+      ],
+      "ai_solutions": [
+        "需要予測による廃棄削減",
+        "シフト最適化",
+        "セルフオーダー・AI提案",
+        "口コミ分析による改善"
+      ]
+    }
+  ],
+  "technologies": [
+    {
+      "id": 1,
+      "name": "需要予測・シフト最適化",
+      "priority": 1,
+      "versatility": 9.5,
+      "economic_scale": 9.0,
+      "implementation_difficulty": 6,
+      "roi_potential": 8.5,
+      "industries": ["介護", "美容", "飲食"],
+      "cost_reduction": "30%",
+      "revenue_increase": "25%",
+      "adoption_barrier": "中程度（データ品質、初期投資）",
+      "payback_months": 8,
+      "description": "天候・曜日・イベント・過去データを分析し、来客数やシフト需要を予測。全産業で最高の汎用性を持つ。",
+      "success_cases": [
+        {
+          "industry": "飲食",
+          "metric": "廃棄削減",
+          "result": "89%削減、売上2.1倍"
+        },
+        {
+          "industry": "飲食",
+          "metric": "回転率向上",
+          "result": "167%向上"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "name": "音声・テキスト記録自動化",
+      "priority": 2,
+      "versatility": 7.0,
+      "economic_scale": 6.5,
+      "implementation_difficulty": 4,
+      "roi_potential": 7.5,
+      "industries": ["介護", "美容"],
+      "cost_reduction": "20%",
+      "revenue_increase": "5%",
+      "adoption_barrier": "低い（導入容易）",
+      "payback_months": 6,
+      "description": "音声認識により、移動中やケアの合間に記録を自動生成。介護現場の記録業務を大幅削減。",
+      "success_cases": [
+        {
+          "industry": "介護",
+          "metric": "記録作業時間",
+          "result": "50%削減"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "name": "画像解析・見守りシステム",
+      "priority": 6,
+      "versatility": 6.5,
+      "economic_scale": 5.0,
+      "implementation_difficulty": 7,
+      "roi_potential": 6.5,
+      "industries": ["介護", "飲食"],
+      "cost_reduction": "15%",
+      "revenue_increase": "10%",
+      "adoption_barrier": "高い（プライバシー、コスト）",
+      "payback_months": 12,
+      "description": "転倒・離床・徘徊をセンサーやカメラで検知。介護現場の安全確保と夜間巡回負担軽減。",
+      "success_cases": [
+        {
+          "industry": "介護",
+          "metric": "夜間巡回",
+          "result": "業務負担軽減"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "name": "生成AI カウンセリング・提案",
+      "priority": 4,
+      "versatility": 8.0,
+      "economic_scale": 4.5,
+      "implementation_difficulty": 5,
+      "roi_potential": 7.0,
+      "industries": ["美容", "飲食"],
+      "cost_reduction": "10%",
+      "revenue_increase": "30%",
+      "adoption_barrier": "中程度（品質管理）",
+      "payback_months": 9,
+      "description": "生成AIによるヘアスタイルシミュレーション、メニュー提案、顧客相談対応。顧客体験の高度化。",
+      "success_cases": [
+        {
+          "industry": "美容",
+          "metric": "カウンセリング品質",
+          "result": "顧客満足度向上"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "name": "顧客分析・パーソナライズ",
+      "priority": 5,
+      "versatility": 7.5,
+      "economic_scale": 6.0,
+      "implementation_difficulty": 5,
+      "roi_potential": 7.5,
+      "industries": ["美容", "飲食"],
+      "cost_reduction": "5%",
+      "revenue_increase": "35%",
+      "adoption_barrier": "中程度（データ管理）",
+      "payback_months": 7,
+      "description": "顧客の来店周期・嗜好・購買履歴を分析。個別提案とリマインドメール自動送信。",
+      "success_cases": [
+        {
+          "industry": "美容",
+          "metric": "リピート率",
+          "result": "25%向上"
+        },
+        {
+          "industry": "飲食",
+          "metric": "客単価",
+          "result": "43%UP"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "name": "在庫管理・自動発注",
+      "priority": 3,
+      "versatility": 6.0,
+      "economic_scale": 7.0,
+      "implementation_difficulty": 4,
+      "roi_potential": 7.0,
+      "industries": ["飲食", "美容"],
+      "cost_reduction": "25%",
+      "revenue_increase": "5%",
+      "adoption_barrier": "低い（導入容易）",
+      "payback_months": 5,
+      "description": "リアルタイム在庫データからAIが最適な発注量を提案。廃棄ロス削減と欠品防止。",
+      "success_cases": [
+        {
+          "industry": "飲食",
+          "metric": "廃棄ロス",
+          "result": "89%削減"
+        }
+      ]
+    }
+  ],
+  "strategic_roadmap": [
+    {
+      "phase": "Phase 1: Quick Wins",
+      "timeline": "0-6ヶ月",
+      "focus": "導入ハードルが低く即効性がある技術",
+      "technologies": [
+        "音声・テキスト記録自動化",
+        "在庫管理・自動発注"
+      ],
+      "target_market": "38兆円（全産業）",
+      "expected_adoption": "5-10%",
+      "revenue_potential": "190-380億円"
+    },
+    {
+      "phase": "Phase 2: Core Solution",
+      "timeline": "6-15ヶ月",
+      "focus": "最高の汎用性と経済規模を持つ中核技術",
+      "technologies": [
+        "需要予測・シフト最適化"
+      ],
+      "target_market": "38兆円（全産業）",
+      "expected_adoption": "8-15%",
+      "revenue_potential": "300-570億円"
+    },
+    {
+      "phase": "Phase 3: Differentiation",
+      "timeline": "12-24ヶ月",
+      "focus": "顧客体験の高度化と競合との差別化",
+      "technologies": [
+        "生成AI カウンセリング・提案",
+        "顧客分析・パーソナライズ"
+      ],
+      "target_market": "38兆円（全産業）",
+      "expected_adoption": "5-10%",
+      "revenue_potential": "190-380億円"
+    },
+    {
+      "phase": "Phase 4: Advanced & International",
+      "timeline": "18-36ヶ月",
+      "focus": "高度な技術と国際展開",
+      "technologies": [
+        "画像解析・見守りシステム",
+        "アジア市場展開"
+      ],
+      "target_market": "アジア市場（中国+東南アジア）",
+      "expected_adoption": "3-5%",
+      "revenue_potential": "300-500億円"
+    }
+  ],
+  "market_insights": {
+    "total_addressable_market": {
+      "japan": 70.7,
+      "asia": 150,
+      "currency": "trillion_yen"
+    },
+    "adoption_barriers": {
+      "cost": "最大の障壁（83.9%の介護施設が補助金希望）",
+      "it_literacy": "スタッフのITリテラシー不足",
+      "data_quality": "初期データの品質確保",
+      "privacy": "顧客データ・プライバシー管理"
+    },
+    "funding_sources": [
+      "ESG投資（介護負担軽減、食品ロス削減）",
+      "海外VC（日本の課題先進国としてのプレミアム）",
+      "政府助成金（DX推進、働き方改革）",
+      "大企業CVC（NTT、NEC等の東南アジア投資ファンド）"
+    ]
+  }
+}
